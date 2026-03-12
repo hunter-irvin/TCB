@@ -6,6 +6,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState
 } from "react";
 import { ROSTER_SIZE, SEED_VERSION, STORAGE_KEY } from "@/lib/constants";
@@ -13,13 +14,15 @@ import { parseRosterCsv } from "@/lib/csv";
 import {
   assignPlayerToSlot,
   clearSlot,
-  createInitialState,
   createEmptyAssignments,
   createEmptyPlayerAttributes,
+  createInitialState,
   getEligiblePlayers,
   pruneAssignments,
   sanitizePlayers
 } from "@/lib/state";
+import { getSupabaseBrowserClient, hasSupabaseBrowserConfig } from "@/lib/supabase/browser";
+import { arePlayersEqual, playerToRow, playersFromRows } from "@/lib/supabase/tcb";
 import type {
   AppState,
   Assignments,
@@ -29,12 +32,15 @@ import type {
   Position,
   SlotDescriptor
 } from "@/lib/types";
+import type { RealtimeChannel } from "@supabase/supabase-js";
 import type { ReactNode } from "react";
 
 type BuilderContextValue = {
   loading: boolean;
   players: Player[];
   assignments: Assignments;
+  syncError: string | null;
+  retrySync: () => void;
   updatePlayerName: (playerId: number, name: string) => void;
   togglePlayerPosition: (playerId: number, position: Position) => void;
   updatePlayerAttribute: (
@@ -64,36 +70,161 @@ function canAssignPlayerToSlot(players: Player[], playerId: number, slot: SlotDe
   return Boolean(player && player.positions.includes(slot.position) && player.name.trim());
 }
 
+async function loadSeedPlayers() {
+  const response = await fetch("/api/seed-roster", { cache: "no-store" });
+  const csv = await response.text();
+  return parseRosterCsv(csv);
+}
+
+async function fetchSupabasePlayers() {
+  const supabase = getSupabaseBrowserClient();
+  const { data, error } = await supabase
+    .from("players")
+    .select(
+      "id,row_number,name,eligible_positions,shooting,driving,assisting,man_defense,help_defense,shot_blocking,playmaking,rebounding,transition"
+    )
+    .order("row_number", { ascending: true });
+
+  if (error) {
+    throw error;
+  }
+
+  return playersFromRows(data ?? []);
+}
+
+async function pushPlayersSnapshot(players: Player[]) {
+  const supabase = getSupabaseBrowserClient();
+  const { error } = await supabase.from("players").upsert(players.map(playerToRow), {
+    onConflict: "id"
+  });
+
+  if (error) {
+    throw error;
+  }
+}
+
 export function TournamentBuilderProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [state, setState] = useState<AppState | null>(null);
+  const [syncError, setSyncError] = useState<string | null>(null);
+  const latestStateRef = useRef<AppState | null>(null);
+  const pendingPlayerSyncRef = useRef<Player[] | null>(null);
+  const syncInFlightRef = useRef(false);
+  const suppressRealtimeRef = useRef(false);
+
+  useEffect(() => {
+    latestStateRef.current = state;
+  }, [state]);
+
+  const flushPlayerSync = useCallback(async () => {
+    if (!hasSupabaseBrowserConfig() || syncInFlightRef.current) {
+      return;
+    }
+
+    const snapshot = pendingPlayerSyncRef.current;
+    if (!snapshot) {
+      return;
+    }
+
+    syncInFlightRef.current = true;
+
+    while (pendingPlayerSyncRef.current) {
+      const nextSnapshot = pendingPlayerSyncRef.current;
+      pendingPlayerSyncRef.current = null;
+
+      try {
+        await pushPlayersSnapshot(nextSnapshot);
+        setSyncError(null);
+        suppressRealtimeRef.current = false;
+      } catch {
+        pendingPlayerSyncRef.current = latestStateRef.current?.players ?? nextSnapshot;
+        setSyncError("Changes saved locally. Backend sync failed.");
+        suppressRealtimeRef.current = true;
+        break;
+      }
+    }
+
+    syncInFlightRef.current = false;
+  }, []);
+
+  const queuePlayerSync = useCallback(
+    (playersSnapshot: Player[]) => {
+      if (!hasSupabaseBrowserConfig()) {
+        return;
+      }
+
+      pendingPlayerSyncRef.current = playersSnapshot;
+      void flushPlayerSync();
+    },
+    [flushPlayerSync]
+  );
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadState() {
       const stored = window.localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored) as AppState;
+      const localState = stored ? (JSON.parse(stored) as AppState) : null;
+      const localPlayers = localState ? sanitizePlayers(localState.players) : null;
+
+      if (localState && !cancelled) {
+        setState({
+          ...localState,
+          players: localPlayers!,
+          assignments: localState.assignments,
+          seedVersion: localState.seedVersion ?? SEED_VERSION
+        });
+        setLoading(false);
+      }
+
+      if (!localState) {
+        const seeded = createInitialState(await loadSeedPlayers());
         if (!cancelled) {
-          setState({
-            ...parsed,
-            players: sanitizePlayers(parsed.players),
-            assignments: parsed.assignments,
-            seedVersion: parsed.seedVersion ?? SEED_VERSION
-          });
+          setState(seeded);
           setLoading(false);
         }
+      }
+
+      if (!hasSupabaseBrowserConfig()) {
         return;
       }
 
-      const response = await fetch("/api/seed-roster", { cache: "no-store" });
-      const csv = await response.text();
-      const seeded = createInitialState(parseRosterCsv(csv));
+      try {
+        const seedPlayers = await loadSeedPlayers();
+        const backendPlayers = await fetchSupabasePlayers();
+        if (cancelled) {
+          return;
+        }
 
-      if (!cancelled) {
-        setState(seeded);
-        setLoading(false);
+        if (
+          localPlayers &&
+          (backendPlayers.length === 0 ||
+            (arePlayersEqual(backendPlayers, seedPlayers) && !arePlayersEqual(localPlayers, seedPlayers)))
+        ) {
+          pendingPlayerSyncRef.current = localPlayers;
+          setSyncError("Migrating local roster to Supabase.");
+          suppressRealtimeRef.current = true;
+          return;
+        }
+
+        setState((current) => {
+          const nextAssignments = pruneAssignments(
+            backendPlayers,
+            current?.assignments ?? createEmptyAssignments()
+          );
+
+          return {
+            players: backendPlayers,
+            assignments: nextAssignments,
+            seedVersion: SEED_VERSION
+          };
+        });
+        setSyncError(null);
+        suppressRealtimeRef.current = false;
+      } catch {
+        if (!cancelled) {
+          setSyncError("Unable to load roster from Supabase. Using local data.");
+        }
       }
     }
 
@@ -112,81 +243,168 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   }, [state]);
 
-  const updatePlayerName = useCallback((playerId: number, name: string) => {
-    setState((current) => {
-      if (!current) {
-        return current;
+  useEffect(() => {
+    if (!hasSupabaseBrowserConfig()) {
+      return undefined;
+    }
+
+    const handleRetry = () => {
+      if (pendingPlayerSyncRef.current) {
+        void flushPlayerSync();
+      }
+    };
+
+    window.addEventListener("focus", handleRetry);
+    window.addEventListener("online", handleRetry);
+
+    return () => {
+      window.removeEventListener("focus", handleRetry);
+      window.removeEventListener("online", handleRetry);
+    };
+  }, [flushPlayerSync]);
+
+  useEffect(() => {
+    if (pendingPlayerSyncRef.current) {
+      void flushPlayerSync();
+    }
+  }, [flushPlayerSync]);
+
+  useEffect(() => {
+    if (!hasSupabaseBrowserConfig()) {
+      return undefined;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+    let active = true;
+    let channel: RealtimeChannel | null = null;
+
+    async function refreshPlayersFromRealtime() {
+      if (suppressRealtimeRef.current) {
+        return;
       }
 
-      return {
-        ...current,
-        players: current.players.map((player) =>
-          player.id === playerId ? { ...player, name } : player
-        ),
-        assignments: pruneAssignments(
-          current.players.map((player) =>
-            player.id === playerId ? { ...player, name } : player
-          ),
-          current.assignments
-        )
-      };
-    });
-  }, []);
-
-  const togglePlayerPosition = useCallback((playerId: number, position: Position) => {
-    setState((current) => {
-      if (!current) {
-        return current;
-      }
-
-      const nextPlayers = current.players.map((player) => {
-        if (player.id !== playerId) {
-          return player;
+      try {
+        const backendPlayers = await fetchSupabasePlayers();
+        if (!active) {
+          return;
         }
 
-        const hasPosition = player.positions.includes(position);
-        const nextPositions = hasPosition
-          ? player.positions.filter((value) => value !== position)
-          : [...player.positions, position];
+        setState((current) => {
+          const currentPlayers = current?.players ?? [];
+          if (arePlayersEqual(currentPlayers, backendPlayers)) {
+            return current;
+          }
 
-        return {
-          ...player,
-          positions: [...nextPositions].sort((a, b) => a - b) as Position[]
-        };
-      });
+          const nextAssignments = pruneAssignments(
+            backendPlayers,
+            current?.assignments ?? createEmptyAssignments()
+          );
 
-      return {
-        ...current,
-        players: nextPlayers,
-        assignments: pruneAssignments(nextPlayers, current.assignments)
-      };
-    });
+          return {
+            players: backendPlayers,
+            assignments: nextAssignments,
+            seedVersion: SEED_VERSION
+          };
+        });
+        setSyncError((current) =>
+          current === "Unable to load roster from Supabase. Using local data." ? null : current
+        );
+      } catch {
+        if (active) {
+          setSyncError("Unable to refresh roster from Supabase. Using local data.");
+        }
+      }
+    }
+
+    channel = supabase
+      .channel("tcb-players")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "players" },
+        () => {
+          void refreshPlayersFromRealtime();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      active = false;
+      if (channel) {
+        void supabase.removeChannel(channel);
+      }
+    };
   }, []);
 
-  const updatePlayerAttribute = useCallback(
-    (playerId: number, attribute: PlayerAttributeKey, rating: PlayerAttributeRating | null) => {
+  const applyPlayerUpdate = useCallback(
+    (updater: (players: Player[]) => Player[]) => {
       setState((current) => {
         if (!current) {
           return current;
         }
 
-        return {
+        const nextPlayers = updater(current.players);
+        const nextState = {
           ...current,
-          players: current.players.map((player) =>
-            player.id === playerId
-              ? {
-                  ...player,
-                  attributes: {
-                    ...player.attributes,
-                    [attribute]: rating
-                  }
-                }
-              : player
-          )
+          players: nextPlayers,
+          assignments: pruneAssignments(nextPlayers, current.assignments)
         };
+
+        queuePlayerSync(nextPlayers);
+        return nextState;
       });
     },
-    []
+    [queuePlayerSync]
+  );
+
+  const updatePlayerName = useCallback(
+    (playerId: number, name: string) => {
+      applyPlayerUpdate((players) =>
+        players.map((player) => (player.id === playerId ? { ...player, name } : player))
+      );
+    },
+    [applyPlayerUpdate]
+  );
+
+  const togglePlayerPosition = useCallback(
+    (playerId: number, position: Position) => {
+      applyPlayerUpdate((players) =>
+        players.map((player) => {
+          if (player.id !== playerId) {
+            return player;
+          }
+
+          const hasPosition = player.positions.includes(position);
+          const nextPositions = hasPosition
+            ? player.positions.filter((value) => value !== position)
+            : [...player.positions, position];
+
+          return {
+            ...player,
+            positions: [...nextPositions].sort((left, right) => left - right) as Position[]
+          };
+        })
+      );
+    },
+    [applyPlayerUpdate]
+  );
+
+  const updatePlayerAttribute = useCallback(
+    (playerId: number, attribute: PlayerAttributeKey, rating: PlayerAttributeRating | null) => {
+      applyPlayerUpdate((players) =>
+        players.map((player) =>
+          player.id === playerId
+            ? {
+                ...player,
+                attributes: {
+                  ...player.attributes,
+                  [attribute]: rating
+                }
+              }
+            : player
+        )
+      );
+    },
+    [applyPlayerUpdate]
   );
 
   const assignPlayer = useCallback((playerId: number, slot: SlotDescriptor) => {
@@ -221,11 +439,20 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
     [state]
   );
 
+  const retrySync = useCallback(() => {
+    if (latestStateRef.current?.players) {
+      pendingPlayerSyncRef.current = latestStateRef.current.players;
+      void flushPlayerSync();
+    }
+  }, [flushPlayerSync]);
+
   const value = useMemo<BuilderContextValue>(
     () => ({
       loading,
       players: state?.players ?? makeBlankPlayers(),
       assignments: state?.assignments ?? createEmptyAssignments(),
+      syncError,
+      retrySync,
       updatePlayerName,
       togglePlayerPosition,
       updatePlayerAttribute,
@@ -238,7 +465,9 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
       clearAssignment,
       getEligibleForSlot,
       loading,
+      retrySync,
       state,
+      syncError,
       togglePlayerPosition,
       updatePlayerAttribute,
       updatePlayerName
