@@ -1,10 +1,21 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AppShell } from "@/components/app-shell";
 import { TournamentBuilderProvider, useTournamentBuilder } from "@/components/tournament-builder";
 import { POSITIONS, TEAMS } from "@/lib/constants";
+import { getSupabaseBrowserClient, hasSupabaseBrowserConfig } from "@/lib/supabase/browser";
+import {
+  areScenariosEquivalent,
+  buildScenarioState,
+  getNextScenarioNumber,
+  isScenarioPristine,
+  parseStoredScenarioState,
+  scenarioAssignmentsToRows,
+  scenariosToRows,
+  TEAM_SCENARIOS_STORAGE_KEY
+} from "@/lib/supabase/tcb";
 import {
   assignPlayerToSlot,
   clearSlot,
@@ -13,15 +24,9 @@ import {
   getEligiblePlayers,
   pruneAssignments
 } from "@/lib/state";
-import type { Assignments, Player, Position, SlotDescriptor, Team } from "@/lib/types";
+import type { Assignments, PersistedScenarioState, Player, Position, Scenario, SlotDescriptor, Team } from "@/lib/types";
+import type { RealtimeChannel } from "@supabase/supabase-js";
 import type { MouseEvent as ReactMouseEvent } from "react";
-
-type Scenario = {
-  id: string;
-  title: string;
-  assignments: Assignments;
-  collapsed: boolean;
-};
 
 type ScenarioSlot = {
   scenarioId: string;
@@ -58,13 +63,6 @@ type ScenarioReorderState = {
 };
 
 type StartDragFn = (playerId: number, chipNode: HTMLDivElement) => void;
-
-type PersistedScenarioState = {
-  nextScenarioNumber: number;
-  scenarios: Scenario[];
-};
-
-const TEAM_SCENARIOS_STORAGE_KEY = "tcb-team-scenarios";
 
 function createScenario(index: number): Scenario {
   return {
@@ -318,7 +316,7 @@ function resolveNearestSlotFromPoint(
 }
 
 function TeamsContent() {
-  const { loading, players } = useTournamentBuilder();
+  const { loading, players, retrySync, syncError: playerSyncError } = useTournamentBuilder();
   const cellRefs = useRef(new Map<string, HTMLDivElement>());
   const wrapRefs = useRef(new Map<string, HTMLDivElement>());
   const chipRefs = useRef(new Map<string, HTMLDivElement>());
@@ -327,9 +325,14 @@ function TeamsContent() {
   const scenarioRectsRef = useRef(new Map<string, DOMRect>());
   const previewTargetRef = useRef<ScenarioSlot | null>(null);
   const poolHoverRef = useRef<string | null>(null);
+  const latestScenariosRef = useRef<Scenario[]>([createScenario(1)]);
+  const pendingScenarioSyncRef = useRef<Scenario[] | null>(null);
+  const scenarioSyncInFlightRef = useRef(false);
+  const suppressScenarioRealtimeRef = useRef(false);
   const [scenarios, setScenarios] = useState<Scenario[]>([createScenario(1)]);
   const [nextScenarioNumber, setNextScenarioNumber] = useState(2);
   const [storageHydrated, setStorageHydrated] = useState(false);
+  const [scenarioSyncError, setScenarioSyncError] = useState<string | null>(null);
   const [nearestSlot, setNearestSlot] = useState<NearestSlot>(null);
   const [animatedSlots, setAnimatedSlots] = useState<string[]>([]);
   const [dragState, setDragState] = useState<DragState | null>(null);
@@ -353,30 +356,92 @@ function TeamsContent() {
   );
 
   useEffect(() => {
-    const storedValue = window.localStorage.getItem(TEAM_SCENARIOS_STORAGE_KEY);
-    if (!storedValue) {
-      setStorageHydrated(true);
-      return;
-    }
+    latestScenariosRef.current = scenarios;
+  }, [scenarios]);
 
-    try {
-      const parsed = JSON.parse(storedValue) as PersistedScenarioState;
-      if (Array.isArray(parsed.scenarios) && parsed.scenarios.length > 0) {
-        setScenarios(
-          parsed.scenarios.map((scenario) => ({
-            ...scenario,
-            collapsed: scenario.collapsed ?? false
-          }))
-        );
-        setNextScenarioNumber(
-          Math.max(parsed.nextScenarioNumber ?? parsed.scenarios.length + 1, parsed.scenarios.length + 1)
-        );
-      }
-    } catch {
-      // Ignore invalid local state and fall back to the default scenario scaffold.
+  useEffect(() => {
+    let cancelled = false;
+    const storedState = parseStoredScenarioState(window.localStorage.getItem(TEAM_SCENARIOS_STORAGE_KEY));
+
+    if (storedState && storedState.scenarios.length > 0) {
+      setScenarios(
+        storedState.scenarios.map((scenario) => ({
+          ...scenario,
+          collapsed: scenario.collapsed ?? false
+        }))
+      );
+      setNextScenarioNumber(
+        Math.max(
+          storedState.nextScenarioNumber ?? storedState.scenarios.length + 1,
+          getNextScenarioNumber(storedState.scenarios)
+        )
+      );
     }
 
     setStorageHydrated(true);
+
+    async function loadScenariosFromSupabase() {
+      if (!hasSupabaseBrowserConfig()) {
+        return;
+      }
+
+      try {
+        const supabase = getSupabaseBrowserClient();
+        const [{ data: scenarioRows, error: scenarioError }, { data: assignmentRows, error: assignmentError }] =
+          await Promise.all([
+            supabase.from("team_scenarios").select("id,title,sort_order").order("sort_order", {
+              ascending: true
+            }),
+            supabase
+              .from("scenario_assignments")
+              .select("scenario_id,team_id,position,player_id")
+              .order("scenario_id", { ascending: true })
+          ]);
+
+        if (scenarioError) {
+          throw scenarioError;
+        }
+
+        if (assignmentError) {
+          throw assignmentError;
+        }
+
+        const backendScenarios = buildScenarioState(
+          scenarioRows ?? [],
+          assignmentRows ?? [],
+          storedState?.scenarios ?? []
+        );
+
+        if (cancelled) {
+          return;
+        }
+
+        if (storedState && storedState.scenarios.length > 0 && isScenarioPristine(backendScenarios)) {
+          pendingScenarioSyncRef.current = storedState.scenarios;
+          suppressScenarioRealtimeRef.current = true;
+          setScenarioSyncError("Migrating local scenarios to Supabase.");
+          return;
+        }
+
+        if (backendScenarios.length > 0) {
+          setScenarios(backendScenarios);
+          setNextScenarioNumber(getNextScenarioNumber(backendScenarios));
+        }
+
+        setScenarioSyncError(null);
+        suppressScenarioRealtimeRef.current = false;
+      } catch {
+        if (!cancelled) {
+          setScenarioSyncError("Unable to load scenarios from Supabase. Using local data.");
+        }
+      }
+    }
+
+    void loadScenariosFromSupabase();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -393,6 +458,128 @@ function TeamsContent() {
     );
   }, [nextScenarioNumber, scenarios, storageHydrated]);
 
+  const flushScenarioSync = useCallback(async () => {
+    if (!hasSupabaseBrowserConfig() || scenarioSyncInFlightRef.current) {
+      return;
+    }
+
+    const snapshot = pendingScenarioSyncRef.current;
+    if (!snapshot) {
+      return;
+    }
+
+    scenarioSyncInFlightRef.current = true;
+
+    while (pendingScenarioSyncRef.current) {
+      const nextSnapshot = pendingScenarioSyncRef.current;
+      pendingScenarioSyncRef.current = null;
+
+      try {
+        const supabase = getSupabaseBrowserClient();
+        const scenarioRows = scenariosToRows(nextSnapshot);
+        const assignmentRows = nextSnapshot.flatMap((scenario) =>
+          scenarioAssignmentsToRows(scenario.id, scenario.assignments)
+        );
+        const scenarioIds = nextSnapshot.map((scenario) => scenario.id);
+
+        const { error: upsertScenariosError } = await supabase
+          .from("team_scenarios")
+          .upsert(scenarioRows, { onConflict: "id" });
+        if (upsertScenariosError) {
+          throw upsertScenariosError;
+        }
+
+        const { data: existingScenarioRows, error: existingScenariosError } = await supabase
+          .from("team_scenarios")
+          .select("id");
+        if (existingScenariosError) {
+          throw existingScenariosError;
+        }
+
+        const staleScenarioIds = (existingScenarioRows ?? [])
+          .map((row) => row.id)
+          .filter((id) => !scenarioIds.includes(id));
+
+        if (staleScenarioIds.length > 0) {
+          const { error: deleteOldScenarioRowsError } = await supabase
+            .from("team_scenarios")
+            .delete()
+            .in("id", staleScenarioIds);
+          if (deleteOldScenarioRowsError) {
+            throw deleteOldScenarioRowsError;
+          }
+        }
+
+        if (scenarioIds.length > 0) {
+          const { error: deleteAssignmentsError } = await supabase
+            .from("scenario_assignments")
+            .delete()
+            .in("scenario_id", scenarioIds);
+          if (deleteAssignmentsError) {
+            throw deleteAssignmentsError;
+          }
+        }
+
+        if (assignmentRows.length > 0) {
+          const { error: insertAssignmentsError } = await supabase
+            .from("scenario_assignments")
+            .insert(assignmentRows);
+          if (insertAssignmentsError) {
+            throw insertAssignmentsError;
+          }
+        }
+
+        setScenarioSyncError(null);
+        suppressScenarioRealtimeRef.current = false;
+      } catch {
+        pendingScenarioSyncRef.current = latestScenariosRef.current;
+        setScenarioSyncError("Changes saved locally. Scenario backend sync failed.");
+        suppressScenarioRealtimeRef.current = true;
+        break;
+      }
+    }
+
+    scenarioSyncInFlightRef.current = false;
+  }, []);
+
+  const queueScenarioSync = useCallback(
+    (snapshot: Scenario[]) => {
+      if (!hasSupabaseBrowserConfig()) {
+        return;
+      }
+
+      pendingScenarioSyncRef.current = snapshot;
+      void flushScenarioSync();
+    },
+    [flushScenarioSync]
+  );
+
+  useEffect(() => {
+    if (!hasSupabaseBrowserConfig()) {
+      return undefined;
+    }
+
+    const handleRetry = () => {
+      if (pendingScenarioSyncRef.current) {
+        void flushScenarioSync();
+      }
+    };
+
+    window.addEventListener("focus", handleRetry);
+    window.addEventListener("online", handleRetry);
+
+    return () => {
+      window.removeEventListener("focus", handleRetry);
+      window.removeEventListener("online", handleRetry);
+    };
+  }, [flushScenarioSync]);
+
+  useEffect(() => {
+    if (storageHydrated && pendingScenarioSyncRef.current) {
+      void flushScenarioSync();
+    }
+  }, [flushScenarioSync, storageHydrated]);
+
   useEffect(() => {
     if (loading) {
       return;
@@ -405,6 +592,84 @@ function TeamsContent() {
       }))
     );
   }, [loading, players]);
+
+  useEffect(() => {
+    if (!hasSupabaseBrowserConfig()) {
+      return undefined;
+    }
+
+    const supabase = getSupabaseBrowserClient();
+    let active = true;
+    let channel: RealtimeChannel | null = null;
+
+    async function refreshScenariosFromRealtime() {
+      if (suppressScenarioRealtimeRef.current) {
+        return;
+      }
+
+      try {
+        const [{ data: scenarioRows, error: scenarioError }, { data: assignmentRows, error: assignmentError }] =
+          await Promise.all([
+            supabase.from("team_scenarios").select("id,title,sort_order").order("sort_order", {
+              ascending: true
+            }),
+            supabase
+              .from("scenario_assignments")
+              .select("scenario_id,team_id,position,player_id")
+              .order("scenario_id", { ascending: true })
+          ]);
+
+        if (scenarioError) {
+          throw scenarioError;
+        }
+
+        if (assignmentError) {
+          throw assignmentError;
+        }
+
+        const backendScenarios = buildScenarioState(
+          scenarioRows ?? [],
+          assignmentRows ?? [],
+          latestScenariosRef.current
+        );
+
+        if (!active) {
+          return;
+        }
+
+        setScenarios((current) => (areScenariosEquivalent(current, backendScenarios) ? current : backendScenarios));
+        setNextScenarioNumber(getNextScenarioNumber(backendScenarios));
+        setScenarioSyncError((current) =>
+          current === "Unable to load scenarios from Supabase. Using local data." ? null : current
+        );
+      } catch {
+        if (active) {
+          setScenarioSyncError("Unable to refresh scenarios from Supabase. Using local data.");
+        }
+      }
+    }
+
+    channel = supabase
+      .channel("tcb-scenarios")
+      .on("postgres_changes", { event: "*", schema: "public", table: "team_scenarios" }, () => {
+        void refreshScenariosFromRealtime();
+      })
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "scenario_assignments" },
+        () => {
+          void refreshScenariosFromRealtime();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      active = false;
+      if (channel) {
+        void supabase.removeChannel(channel);
+      }
+    };
+  }, []);
 
   const displayedAssignmentsByScenario = useMemo(() => {
     const nextDisplayed = new Map<string, Assignments>();
@@ -489,22 +754,28 @@ function TeamsContent() {
     scenarioId: string,
     updater: (assignments: Assignments) => Assignments
   ) => {
-    setScenarios((current) =>
-      current.map((scenario) =>
+    setScenarios((current) => {
+      const nextScenarios = current.map((scenario) =>
         scenario.id === scenarioId
           ? {
               ...scenario,
               assignments: updater(scenario.assignments)
             }
           : scenario
-      )
-    );
+      );
+      queueScenarioSync(nextScenarios);
+      return nextScenarios;
+    });
   };
 
   const updateScenarioTitle = (scenarioId: string, title: string) => {
-    setScenarios((current) =>
-      current.map((scenario) => (scenario.id === scenarioId ? { ...scenario, title } : scenario))
-    );
+    setScenarios((current) => {
+      const nextScenarios = current.map((scenario) =>
+        scenario.id === scenarioId ? { ...scenario, title } : scenario
+      );
+      queueScenarioSync(nextScenarios);
+      return nextScenarios;
+    });
   };
 
   const toggleScenarioCollapsed = (scenarioId: string) => {
@@ -598,8 +869,12 @@ function TeamsContent() {
 
   const addScenario = () => {
     const nextScenario = createScenario(nextScenarioNumber);
-    setScenarios((current) => [...current, nextScenario]);
-    setNextScenarioNumber((current) => current + 1);
+    setScenarios((current) => {
+      const nextScenarios = [...current, nextScenario];
+      queueScenarioSync(nextScenarios);
+      return nextScenarios;
+    });
+    setNextScenarioNumber((current) => Math.max(current + 1, nextScenarioNumber + 1));
     setOpenPickerSlot(null);
     setSelectedAvailablePlayer(null);
   };
@@ -627,9 +902,15 @@ function TeamsContent() {
     };
 
     const handleUp = () => {
-      setScenarios((current) =>
-        moveScenarioToIndex(current, scenarioReorder.scenarioId, scenarioReorder.insertIndex)
-      );
+      setScenarios((current) => {
+        const nextScenarios = moveScenarioToIndex(
+          current,
+          scenarioReorder.scenarioId,
+          scenarioReorder.insertIndex
+        );
+        queueScenarioSync(nextScenarios);
+        return nextScenarios;
+      });
       setScenarioReorder(null);
     };
 
@@ -644,7 +925,7 @@ function TeamsContent() {
       document.body.style.userSelect = "";
       document.body.style.cursor = "";
     };
-  }, [scenarioReorder, scenarios]);
+  }, [queueScenarioSync, scenarioReorder, scenarios]);
 
   useLayoutEffect(() => {
     const nextRects = new Map<string, DOMRect>();
@@ -838,6 +1119,25 @@ function TeamsContent() {
         <div className="status-chip">
           {loading ? "Loading roster seed..." : "Drag chips within a scenario or use each scenario's player pool."}
         </div>
+        {playerSyncError ? (
+          <button type="button" className="status-chip error" onClick={retrySync}>
+            {playerSyncError} Retry roster sync
+          </button>
+        ) : null}
+        {scenarioSyncError ? (
+          <button
+            type="button"
+            className="status-chip error"
+            onClick={() => {
+              if (latestScenariosRef.current) {
+                pendingScenarioSyncRef.current = latestScenariosRef.current;
+                void flushScenarioSync();
+              }
+            }}
+          >
+            {scenarioSyncError} Retry scenario sync
+          </button>
+        ) : null}
       </div>
       <div className="scenario-stack">
         {orderedScenarios.map((scenario) => {

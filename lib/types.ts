@@ -41,3 +41,15 @@ export type SlotDescriptor = {
   teamId: string;
   position: Position;
 };
+
+export type Scenario = {
+  id: string;
+  title: string;
+  assignments: Assignments;
+  collapsed: boolean;
+};
+
+export type PersistedScenarioState = {
+  nextScenarioNumber: number;
+  scenarios: Scenario[];
+};

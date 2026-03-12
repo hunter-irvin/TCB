@@ -146,6 +146,17 @@ select {
   font-size: 0.92rem;
 }
 
+.status-chip.error {
+  border: 0;
+  background: rgba(173, 47, 47, 0.22);
+  color: #ffe2d8;
+  cursor: pointer;
+}
+
+.status-chip.error:hover {
+  background: rgba(173, 47, 47, 0.28);
+}
+
 .table-shell {
   padding: 18px;
 }
