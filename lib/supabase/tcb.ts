@@ -38,6 +38,35 @@ type DbScenarioAssignmentRow = {
 };
 
 export const TEAM_SCENARIOS_STORAGE_KEY = "tcb-team-scenarios";
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+function fallbackUuid() {
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, (value) => {
+    const random = Math.floor(Math.random() * 16);
+    const next = value === "x" ? random : (random & 0x3) | 0x8;
+    return next.toString(16);
+  });
+}
+
+export function createScenarioId() {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+
+  return fallbackUuid();
+}
+
+export function isUuid(value: string) {
+  return UUID_PATTERN.test(value);
+}
+
+export function normalizeScenarioIds(scenarios: Scenario[]) {
+  return scenarios.map((scenario) => ({
+    ...scenario,
+    id: isUuid(scenario.id) ? scenario.id : createScenarioId()
+  }));
+}
 
 function normalizePositions(values: number[] | null | undefined): Position[] {
   return [...new Set((values ?? []).filter((value) => value >= 1 && value <= 5))].sort(
@@ -133,13 +162,15 @@ export function buildScenarioState(
 
 export function scenarioAssignmentsToRows(scenarioId: string, assignments: Assignments) {
   return Object.entries(assignments).flatMap(([teamId, teamAssignments]) =>
-    Object.entries(teamAssignments).map(([position, playerId]) => ({
-      scenario_id: scenarioId,
-      team_id: teamId,
-      position: Number(position),
-      player_id: playerId,
-      updated_at: new Date().toISOString()
-    }))
+    Object.entries(teamAssignments)
+      .filter(([, playerId]) => playerId !== null)
+      .map(([position, playerId]) => ({
+        scenario_id: scenarioId,
+        team_id: teamId,
+        position: Number(position),
+        player_id: playerId,
+        updated_at: new Date().toISOString()
+      }))
   );
 }
 
@@ -220,7 +251,7 @@ export function parseStoredScenarioState(value: string | null): PersistedScenari
 
     return {
       nextScenarioNumber: parsed.nextScenarioNumber,
-      scenarios: parsed.scenarios
+      scenarios: normalizeScenarioIds(parsed.scenarios)
     };
   } catch {
     return null;

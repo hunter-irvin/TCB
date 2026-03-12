@@ -170,6 +170,7 @@ function RosterContent() {
                   positions={player.positions}
                   attributes={player.attributes}
                   onNameChange={updatePlayerName}
+                  onNameBlur={retrySync}
                   onPositionToggle={togglePlayerPosition}
                   onAttributeChange={updatePlayerAttribute}
                 />
@@ -189,6 +190,7 @@ function RosterRow({
   positions,
   attributes,
   onNameChange,
+  onNameBlur,
   onPositionToggle,
   onAttributeChange
 }: {
@@ -198,6 +200,7 @@ function RosterRow({
   positions: Position[];
   attributes: PlayerAttributes;
   onNameChange: (playerId: number, nextName: string) => void;
+  onNameBlur: () => void;
   onPositionToggle: (playerId: number, position: Position) => void;
   onAttributeChange: (
     playerId: number,
@@ -214,6 +217,7 @@ function RosterRow({
           aria-label={`Player ${rowNumber} name`}
           value={name}
           onChange={(event) => onNameChange(id, event.target.value)}
+          onBlur={onNameBlur}
           placeholder="Enter player name"
         />
       </td>

@@ -7,10 +7,13 @@ import { TournamentBuilderProvider, useTournamentBuilder } from "@/components/to
 import { POSITIONS, TEAMS } from "@/lib/constants";
 import { getSupabaseBrowserClient, hasSupabaseBrowserConfig } from "@/lib/supabase/browser";
 import {
+  areAssignmentsEqual,
   areScenariosEquivalent,
   buildScenarioState,
+  createScenarioId,
   getNextScenarioNumber,
   isScenarioPristine,
+  normalizeScenarioIds,
   parseStoredScenarioState,
   scenarioAssignmentsToRows,
   scenariosToRows,
@@ -63,14 +66,23 @@ type ScenarioReorderState = {
 };
 
 type StartDragFn = (playerId: number, chipNode: HTMLDivElement) => void;
+const SCENARIO_SYNC_DEBOUNCE_MS = 2000;
 
 function createScenario(index: number): Scenario {
   return {
-    id: `scenario-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+    id: createScenarioId(),
     title: `Team Scenario ${index}`,
     assignments: createEmptyAssignments(),
     collapsed: false
   };
+}
+
+function getScenarioMetaSignature(scenarios: Scenario[]) {
+  return JSON.stringify(scenariosToRows(scenarios));
+}
+
+function getScenarioAssignmentSignature(assignments: Assignments) {
+  return JSON.stringify(assignments);
 }
 
 function isSameSlot(left: SlotDescriptor | null, right: SlotDescriptor | null): boolean {
@@ -326,9 +338,28 @@ function TeamsContent() {
   const previewTargetRef = useRef<ScenarioSlot | null>(null);
   const poolHoverRef = useRef<string | null>(null);
   const latestScenariosRef = useRef<Scenario[]>([createScenario(1)]);
-  const pendingScenarioSyncRef = useRef<Scenario[] | null>(null);
-  const scenarioSyncInFlightRef = useRef(false);
+  const lastSyncedScenarioMetaSignatureRef = useRef(
+    getScenarioMetaSignature(latestScenariosRef.current)
+  );
+  const lastSyncedScenarioAssignmentSignaturesRef = useRef(
+    new Map(
+      latestScenariosRef.current.map((scenario) => [
+        scenario.id,
+        getScenarioAssignmentSignature(scenario.assignments)
+      ])
+    )
+  );
+  const pendingScenarioMetaRef = useRef<Scenario[] | null>(null);
+  const pendingScenarioAssignmentsRef = useRef<Scenario[] | null>(null);
+  const dirtyScenarioAssignmentIdsRef = useRef(new Set<string>());
+  const scenarioMetaSyncInFlightRef = useRef(false);
+  const scenarioAssignmentSyncInFlightRef = useRef(false);
   const suppressScenarioRealtimeRef = useRef(false);
+  const scenarioRefreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scenarioRefreshInFlightRef = useRef(false);
+  const scenarioRefreshQueuedRef = useRef(false);
+  const scenarioMetaSyncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scenarioAssignmentSyncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [scenarios, setScenarios] = useState<Scenario[]>([createScenario(1)]);
   const [nextScenarioNumber, setNextScenarioNumber] = useState(2);
   const [storageHydrated, setStorageHydrated] = useState(false);
@@ -359,21 +390,32 @@ function TeamsContent() {
     latestScenariosRef.current = scenarios;
   }, [scenarios]);
 
+  const syncScenarioRefsFromSnapshot = useCallback((snapshot: Scenario[]) => {
+    lastSyncedScenarioMetaSignatureRef.current = getScenarioMetaSignature(snapshot);
+    lastSyncedScenarioAssignmentSignaturesRef.current = new Map(
+      snapshot.map((scenario) => [
+        scenario.id,
+        getScenarioAssignmentSignature(scenario.assignments)
+      ])
+    );
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     const storedState = parseStoredScenarioState(window.localStorage.getItem(TEAM_SCENARIOS_STORAGE_KEY));
 
     if (storedState && storedState.scenarios.length > 0) {
+      const normalizedScenarios = normalizeScenarioIds(storedState.scenarios).map((scenario) => ({
+        ...scenario,
+        collapsed: scenario.collapsed ?? false
+      }));
       setScenarios(
-        storedState.scenarios.map((scenario) => ({
-          ...scenario,
-          collapsed: scenario.collapsed ?? false
-        }))
+        normalizedScenarios
       );
       setNextScenarioNumber(
         Math.max(
-          storedState.nextScenarioNumber ?? storedState.scenarios.length + 1,
-          getNextScenarioNumber(storedState.scenarios)
+          storedState.nextScenarioNumber ?? normalizedScenarios.length + 1,
+          getNextScenarioNumber(normalizedScenarios)
         )
       );
     }
@@ -417,7 +459,12 @@ function TeamsContent() {
         }
 
         if (storedState && storedState.scenarios.length > 0 && isScenarioPristine(backendScenarios)) {
-          pendingScenarioSyncRef.current = storedState.scenarios;
+          const migratedScenarios = normalizeScenarioIds(storedState.scenarios);
+          pendingScenarioMetaRef.current = migratedScenarios;
+          pendingScenarioAssignmentsRef.current = migratedScenarios;
+          dirtyScenarioAssignmentIdsRef.current = new Set(
+            migratedScenarios.map((scenario) => scenario.id)
+          );
           suppressScenarioRealtimeRef.current = true;
           setScenarioSyncError("Migrating local scenarios to Supabase.");
           return;
@@ -426,6 +473,7 @@ function TeamsContent() {
         if (backendScenarios.length > 0) {
           setScenarios(backendScenarios);
           setNextScenarioNumber(getNextScenarioNumber(backendScenarios));
+          syncScenarioRefsFromSnapshot(backendScenarios);
         }
 
         setScenarioSyncError(null);
@@ -458,28 +506,25 @@ function TeamsContent() {
     );
   }, [nextScenarioNumber, scenarios, storageHydrated]);
 
-  const flushScenarioSync = useCallback(async () => {
-    if (!hasSupabaseBrowserConfig() || scenarioSyncInFlightRef.current) {
+  const flushScenarioMetaSync = useCallback(async () => {
+    if (!hasSupabaseBrowserConfig() || scenarioMetaSyncInFlightRef.current) {
       return;
     }
 
-    const snapshot = pendingScenarioSyncRef.current;
+    const snapshot = pendingScenarioMetaRef.current;
     if (!snapshot) {
       return;
     }
 
-    scenarioSyncInFlightRef.current = true;
+    scenarioMetaSyncInFlightRef.current = true;
 
-    while (pendingScenarioSyncRef.current) {
-      const nextSnapshot = pendingScenarioSyncRef.current;
-      pendingScenarioSyncRef.current = null;
+    while (pendingScenarioMetaRef.current) {
+      const nextSnapshot = pendingScenarioMetaRef.current;
+      pendingScenarioMetaRef.current = null;
 
       try {
         const supabase = getSupabaseBrowserClient();
         const scenarioRows = scenariosToRows(nextSnapshot);
-        const assignmentRows = nextSnapshot.flatMap((scenario) =>
-          scenarioAssignmentsToRows(scenario.id, scenario.assignments)
-        );
         const scenarioIds = nextSnapshot.map((scenario) => scenario.id);
 
         const { error: upsertScenariosError } = await supabase
@@ -510,14 +555,61 @@ function TeamsContent() {
           }
         }
 
-        if (scenarioIds.length > 0) {
-          const { error: deleteAssignmentsError } = await supabase
-            .from("scenario_assignments")
-            .delete()
-            .in("scenario_id", scenarioIds);
-          if (deleteAssignmentsError) {
-            throw deleteAssignmentsError;
-          }
+        lastSyncedScenarioMetaSignatureRef.current = getScenarioMetaSignature(nextSnapshot);
+        setScenarioSyncError(null);
+        suppressScenarioRealtimeRef.current = false;
+      } catch {
+        pendingScenarioMetaRef.current = latestScenariosRef.current;
+        setScenarioSyncError("Changes saved locally. Scenario backend sync failed.");
+        suppressScenarioRealtimeRef.current = true;
+        break;
+      }
+    }
+
+    scenarioMetaSyncInFlightRef.current = false;
+  }, [syncScenarioRefsFromSnapshot]);
+
+  const flushScenarioAssignmentsSync = useCallback(async () => {
+    if (!hasSupabaseBrowserConfig() || scenarioAssignmentSyncInFlightRef.current) {
+      return;
+    }
+
+    if (pendingScenarioMetaRef.current || scenarioMetaSyncInFlightRef.current) {
+      await flushScenarioMetaSync();
+      if (pendingScenarioMetaRef.current || scenarioMetaSyncInFlightRef.current) {
+        return;
+      }
+    }
+
+    const snapshot = pendingScenarioAssignmentsRef.current;
+    if (!snapshot || dirtyScenarioAssignmentIdsRef.current.size === 0) {
+      return;
+    }
+
+    scenarioAssignmentSyncInFlightRef.current = true;
+
+    while (pendingScenarioAssignmentsRef.current && dirtyScenarioAssignmentIdsRef.current.size > 0) {
+      const nextSnapshot = pendingScenarioAssignmentsRef.current;
+      const dirtyScenarioIds = Array.from(dirtyScenarioAssignmentIdsRef.current);
+      pendingScenarioAssignmentsRef.current = null;
+      dirtyScenarioAssignmentIdsRef.current = new Set();
+
+      try {
+        const supabase = getSupabaseBrowserClient();
+        const snapshotByScenarioId = new Map(
+          nextSnapshot.map((scenario) => [scenario.id, scenario] as const)
+        );
+        const assignmentRows = dirtyScenarioIds.flatMap((scenarioId) => {
+          const scenario = snapshotByScenarioId.get(scenarioId);
+          return scenario ? scenarioAssignmentsToRows(scenario.id, scenario.assignments) : [];
+        });
+
+        const { error: deleteAssignmentsError } = await supabase
+          .from("scenario_assignments")
+          .delete()
+          .in("scenario_id", dirtyScenarioIds);
+        if (deleteAssignmentsError) {
+          throw deleteAssignmentsError;
         }
 
         if (assignmentRows.length > 0) {
@@ -529,29 +621,133 @@ function TeamsContent() {
           }
         }
 
+        const nextAssignmentSignatures = new Map(lastSyncedScenarioAssignmentSignaturesRef.current);
+        for (const scenarioId of dirtyScenarioIds) {
+          const scenario = snapshotByScenarioId.get(scenarioId);
+          if (scenario) {
+            nextAssignmentSignatures.set(
+              scenarioId,
+              getScenarioAssignmentSignature(scenario.assignments)
+            );
+          } else {
+            nextAssignmentSignatures.delete(scenarioId);
+          }
+        }
+        lastSyncedScenarioAssignmentSignaturesRef.current = nextAssignmentSignatures;
         setScenarioSyncError(null);
         suppressScenarioRealtimeRef.current = false;
       } catch {
-        pendingScenarioSyncRef.current = latestScenariosRef.current;
+        pendingScenarioAssignmentsRef.current = latestScenariosRef.current;
+        dirtyScenarioAssignmentIdsRef.current = new Set([
+          ...dirtyScenarioIds,
+          ...dirtyScenarioAssignmentIdsRef.current
+        ]);
         setScenarioSyncError("Changes saved locally. Scenario backend sync failed.");
         suppressScenarioRealtimeRef.current = true;
         break;
       }
     }
 
-    scenarioSyncInFlightRef.current = false;
-  }, []);
+    scenarioAssignmentSyncInFlightRef.current = false;
+  }, [flushScenarioMetaSync]);
 
-  const queueScenarioSync = useCallback(
-    (snapshot: Scenario[]) => {
+  const flushPendingScenarioSync = useCallback(async () => {
+    await flushScenarioMetaSync();
+    await flushScenarioAssignmentsSync();
+  }, [flushScenarioAssignmentsSync, flushScenarioMetaSync]);
+
+  const scheduleScenarioMetaSync = useCallback(
+    (immediate = false) => {
       if (!hasSupabaseBrowserConfig()) {
         return;
       }
 
-      pendingScenarioSyncRef.current = snapshot;
-      void flushScenarioSync();
+      if (scenarioMetaSyncTimeoutRef.current) {
+        clearTimeout(scenarioMetaSyncTimeoutRef.current);
+        scenarioMetaSyncTimeoutRef.current = null;
+      }
+
+      if (immediate) {
+        void flushScenarioMetaSync();
+        return;
+      }
+
+      scenarioMetaSyncTimeoutRef.current = setTimeout(() => {
+        scenarioMetaSyncTimeoutRef.current = null;
+        void flushScenarioMetaSync();
+      }, SCENARIO_SYNC_DEBOUNCE_MS);
     },
-    [flushScenarioSync]
+    [flushScenarioMetaSync]
+  );
+
+  const scheduleScenarioAssignmentsSync = useCallback(
+    (immediate = false) => {
+      if (!hasSupabaseBrowserConfig()) {
+        return;
+      }
+
+      if (scenarioAssignmentSyncTimeoutRef.current) {
+        clearTimeout(scenarioAssignmentSyncTimeoutRef.current);
+        scenarioAssignmentSyncTimeoutRef.current = null;
+      }
+
+      if (immediate) {
+        void flushScenarioAssignmentsSync();
+        return;
+      }
+
+      scenarioAssignmentSyncTimeoutRef.current = setTimeout(() => {
+        scenarioAssignmentSyncTimeoutRef.current = null;
+        void flushScenarioAssignmentsSync();
+      }, SCENARIO_SYNC_DEBOUNCE_MS);
+    },
+    [flushScenarioAssignmentsSync]
+  );
+
+  const queueScenarioMetaSync = useCallback(
+    (snapshot: Scenario[], options?: { immediate?: boolean }) => {
+      if (!hasSupabaseBrowserConfig()) {
+        return;
+      }
+
+      if (getScenarioMetaSignature(snapshot) === lastSyncedScenarioMetaSignatureRef.current) {
+        pendingScenarioMetaRef.current = null;
+        return;
+      }
+
+      pendingScenarioMetaRef.current = snapshot;
+      scheduleScenarioMetaSync(options?.immediate ?? false);
+    },
+    [scheduleScenarioMetaSync]
+  );
+
+  const queueScenarioAssignmentsSync = useCallback(
+    (snapshot: Scenario[], dirtyScenarioIds: string[], options?: { immediate?: boolean }) => {
+      if (!hasSupabaseBrowserConfig()) {
+        return;
+      }
+
+      const nextDirtyScenarioIds = dirtyScenarioIds.filter((scenarioId) => {
+        const scenario = snapshot.find((candidate) => candidate.id === scenarioId);
+        const nextSignature = scenario
+          ? getScenarioAssignmentSignature(scenario.assignments)
+          : null;
+        const previousSignature =
+          lastSyncedScenarioAssignmentSignaturesRef.current.get(scenarioId) ?? null;
+        return nextSignature !== previousSignature;
+      });
+
+      if (nextDirtyScenarioIds.length === 0) {
+        return;
+      }
+
+      pendingScenarioAssignmentsRef.current = snapshot;
+      for (const scenarioId of nextDirtyScenarioIds) {
+        dirtyScenarioAssignmentIdsRef.current.add(scenarioId);
+      }
+      scheduleScenarioAssignmentsSync(options?.immediate ?? false);
+    },
+    [scheduleScenarioAssignmentsSync]
   );
 
   useEffect(() => {
@@ -560,38 +756,75 @@ function TeamsContent() {
     }
 
     const handleRetry = () => {
-      if (pendingScenarioSyncRef.current) {
-        void flushScenarioSync();
+      if (pendingScenarioMetaRef.current || pendingScenarioAssignmentsRef.current) {
+        void flushPendingScenarioSync();
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        void flushPendingScenarioSync();
       }
     };
 
     window.addEventListener("focus", handleRetry);
     window.addEventListener("online", handleRetry);
+    window.addEventListener("pagehide", handleRetry);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       window.removeEventListener("focus", handleRetry);
       window.removeEventListener("online", handleRetry);
+      window.removeEventListener("pagehide", handleRetry);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [flushScenarioSync]);
+  }, [flushPendingScenarioSync]);
 
   useEffect(() => {
-    if (storageHydrated && pendingScenarioSyncRef.current) {
-      void flushScenarioSync();
+    if (storageHydrated && (pendingScenarioMetaRef.current || pendingScenarioAssignmentsRef.current)) {
+      void flushPendingScenarioSync();
     }
-  }, [flushScenarioSync, storageHydrated]);
+  }, [flushPendingScenarioSync, storageHydrated]);
+
+  useEffect(
+    () => () => {
+      if (scenarioMetaSyncTimeoutRef.current) {
+        clearTimeout(scenarioMetaSyncTimeoutRef.current);
+      }
+      if (scenarioAssignmentSyncTimeoutRef.current) {
+        clearTimeout(scenarioAssignmentSyncTimeoutRef.current);
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     if (loading) {
       return;
     }
 
-    setScenarios((current) =>
-      current.map((scenario) => ({
-        ...scenario,
-        assignments: pruneAssignments(players, scenario.assignments)
-      }))
-    );
-  }, [loading, players]);
+    setScenarios((current) => {
+      const dirtyScenarioIds: string[] = [];
+      const nextScenarios = current.map((scenario) => {
+        const nextAssignments = pruneAssignments(players, scenario.assignments);
+        if (!areAssignmentsEqual(nextAssignments, scenario.assignments)) {
+          dirtyScenarioIds.push(scenario.id);
+          return {
+            ...scenario,
+            assignments: nextAssignments
+          };
+        }
+
+        return scenario;
+      });
+
+      if (dirtyScenarioIds.length > 0) {
+        queueScenarioAssignmentsSync(nextScenarios, dirtyScenarioIds);
+      }
+
+      return nextScenarios;
+    });
+  }, [loading, players, queueScenarioAssignmentsSync]);
 
   useEffect(() => {
     if (!hasSupabaseBrowserConfig()) {
@@ -601,11 +834,17 @@ function TeamsContent() {
     const supabase = getSupabaseBrowserClient();
     let active = true;
     let channel: RealtimeChannel | null = null;
-
-    async function refreshScenariosFromRealtime() {
+    const runRefresh = async () => {
       if (suppressScenarioRealtimeRef.current) {
         return;
       }
+
+      if (scenarioRefreshInFlightRef.current) {
+        scenarioRefreshQueuedRef.current = true;
+        return;
+      }
+
+      scenarioRefreshInFlightRef.current = true;
 
       try {
         const [{ data: scenarioRows, error: scenarioError }, { data: assignmentRows, error: assignmentError }] =
@@ -639,6 +878,7 @@ function TeamsContent() {
 
         setScenarios((current) => (areScenariosEquivalent(current, backendScenarios) ? current : backendScenarios));
         setNextScenarioNumber(getNextScenarioNumber(backendScenarios));
+        syncScenarioRefsFromSnapshot(backendScenarios);
         setScenarioSyncError((current) =>
           current === "Unable to load scenarios from Supabase. Using local data." ? null : current
         );
@@ -646,30 +886,56 @@ function TeamsContent() {
         if (active) {
           setScenarioSyncError("Unable to refresh scenarios from Supabase. Using local data.");
         }
+      } finally {
+        scenarioRefreshInFlightRef.current = false;
+
+        if (scenarioRefreshQueuedRef.current && active) {
+          scenarioRefreshQueuedRef.current = false;
+          void runRefresh();
+        }
       }
-    }
+    };
+
+    const scheduleRefresh = () => {
+      if (suppressScenarioRealtimeRef.current) {
+        return;
+      }
+
+      if (scenarioRefreshTimeoutRef.current) {
+        clearTimeout(scenarioRefreshTimeoutRef.current);
+      }
+
+      scenarioRefreshTimeoutRef.current = setTimeout(() => {
+        scenarioRefreshTimeoutRef.current = null;
+        void runRefresh();
+      }, 150);
+    };
 
     channel = supabase
       .channel("tcb-scenarios")
       .on("postgres_changes", { event: "*", schema: "public", table: "team_scenarios" }, () => {
-        void refreshScenariosFromRealtime();
+        scheduleRefresh();
       })
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "scenario_assignments" },
         () => {
-          void refreshScenariosFromRealtime();
+          scheduleRefresh();
         }
       )
       .subscribe();
 
     return () => {
       active = false;
+      if (scenarioRefreshTimeoutRef.current) {
+        clearTimeout(scenarioRefreshTimeoutRef.current);
+        scenarioRefreshTimeoutRef.current = null;
+      }
       if (channel) {
         void supabase.removeChannel(channel);
       }
     };
-  }, []);
+  }, [syncScenarioRefsFromSnapshot]);
 
   const displayedAssignmentsByScenario = useMemo(() => {
     const nextDisplayed = new Map<string, Assignments>();
@@ -763,17 +1029,21 @@ function TeamsContent() {
             }
           : scenario
       );
-      queueScenarioSync(nextScenarios);
+      queueScenarioAssignmentsSync(nextScenarios, [scenarioId]);
       return nextScenarios;
     });
   };
 
-  const updateScenarioTitle = (scenarioId: string, title: string) => {
+  const updateScenarioTitle = (
+    scenarioId: string,
+    title: string,
+    options?: { immediate?: boolean }
+  ) => {
     setScenarios((current) => {
       const nextScenarios = current.map((scenario) =>
         scenario.id === scenarioId ? { ...scenario, title } : scenario
       );
-      queueScenarioSync(nextScenarios);
+      queueScenarioMetaSync(nextScenarios, options);
       return nextScenarios;
     });
   };
@@ -871,7 +1141,7 @@ function TeamsContent() {
     const nextScenario = createScenario(nextScenarioNumber);
     setScenarios((current) => {
       const nextScenarios = [...current, nextScenario];
-      queueScenarioSync(nextScenarios);
+      queueScenarioMetaSync(nextScenarios);
       return nextScenarios;
     });
     setNextScenarioNumber((current) => Math.max(current + 1, nextScenarioNumber + 1));
@@ -908,7 +1178,7 @@ function TeamsContent() {
           scenarioReorder.scenarioId,
           scenarioReorder.insertIndex
         );
-        queueScenarioSync(nextScenarios);
+        queueScenarioMetaSync(nextScenarios);
         return nextScenarios;
       });
       setScenarioReorder(null);
@@ -925,7 +1195,7 @@ function TeamsContent() {
       document.body.style.userSelect = "";
       document.body.style.cursor = "";
     };
-  }, [queueScenarioSync, scenarioReorder, scenarios]);
+  }, [queueScenarioMetaSync, scenarioReorder, scenarios]);
 
   useLayoutEffect(() => {
     const nextRects = new Map<string, DOMRect>();
@@ -1130,8 +1400,12 @@ function TeamsContent() {
             className="status-chip error"
             onClick={() => {
               if (latestScenariosRef.current) {
-                pendingScenarioSyncRef.current = latestScenariosRef.current;
-                void flushScenarioSync();
+                pendingScenarioMetaRef.current = latestScenariosRef.current;
+                pendingScenarioAssignmentsRef.current = latestScenariosRef.current;
+                dirtyScenarioAssignmentIdsRef.current = new Set(
+                  latestScenariosRef.current.map((scenario) => scenario.id)
+                );
+                void flushPendingScenarioSync();
               }
             }}
           >
@@ -1237,6 +1511,9 @@ function TeamsContent() {
                   className="scenario-title-input"
                   value={scenario.title}
                   onChange={(event) => updateScenarioTitle(scenario.id, event.target.value)}
+                  onBlur={(event) =>
+                    updateScenarioTitle(scenario.id, event.target.value, { immediate: true })
+                  }
                   aria-label={`Scenario title for ${scenario.title || "scenario"}`}
                   placeholder="Team Scenario"
                   spellCheck={false}

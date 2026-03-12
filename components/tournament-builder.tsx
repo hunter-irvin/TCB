@@ -54,6 +54,7 @@ type BuilderContextValue = {
 };
 
 const BuilderContext = createContext<BuilderContextValue | null>(null);
+const PLAYER_SYNC_DEBOUNCE_MS = 2000;
 
 function makeBlankPlayers(): Player[] {
   return Array.from({ length: ROSTER_SIZE }, (_, index) => ({
@@ -108,13 +109,22 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
   const [state, setState] = useState<AppState | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const latestStateRef = useRef<AppState | null>(null);
+  const lastSyncedPlayersRef = useRef<Player[]>([]);
   const pendingPlayerSyncRef = useRef<Player[] | null>(null);
   const syncInFlightRef = useRef(false);
   const suppressRealtimeRef = useRef(false);
+  const syncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshInFlightRef = useRef(false);
+  const refreshQueuedRef = useRef(false);
 
   useEffect(() => {
     latestStateRef.current = state;
   }, [state]);
+
+  const syncPlayerRefFromSnapshot = useCallback((players: Player[]) => {
+    lastSyncedPlayersRef.current = players;
+  }, []);
 
   const flushPlayerSync = useCallback(async () => {
     if (!hasSupabaseBrowserConfig() || syncInFlightRef.current) {
@@ -134,6 +144,7 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
 
       try {
         await pushPlayersSnapshot(nextSnapshot);
+        lastSyncedPlayersRef.current = nextSnapshot;
         setSyncError(null);
         suppressRealtimeRef.current = false;
       } catch {
@@ -147,16 +158,45 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
     syncInFlightRef.current = false;
   }, []);
 
-  const queuePlayerSync = useCallback(
-    (playersSnapshot: Player[]) => {
+  const schedulePlayerSync = useCallback(
+    (immediate = false) => {
       if (!hasSupabaseBrowserConfig()) {
         return;
       }
 
-      pendingPlayerSyncRef.current = playersSnapshot;
-      void flushPlayerSync();
+      if (syncTimeoutRef.current) {
+        clearTimeout(syncTimeoutRef.current);
+        syncTimeoutRef.current = null;
+      }
+
+      if (immediate) {
+        void flushPlayerSync();
+        return;
+      }
+
+      syncTimeoutRef.current = setTimeout(() => {
+        syncTimeoutRef.current = null;
+        void flushPlayerSync();
+      }, PLAYER_SYNC_DEBOUNCE_MS);
     },
     [flushPlayerSync]
+  );
+
+  const queuePlayerSync = useCallback(
+    (playersSnapshot: Player[], options?: { immediate?: boolean }) => {
+      if (!hasSupabaseBrowserConfig()) {
+        return;
+      }
+
+      if (arePlayersEqual(playersSnapshot, lastSyncedPlayersRef.current)) {
+        pendingPlayerSyncRef.current = null;
+        return;
+      }
+
+      pendingPlayerSyncRef.current = playersSnapshot;
+      schedulePlayerSync(options?.immediate ?? false);
+    },
+    [schedulePlayerSync]
   );
 
   useEffect(() => {
@@ -219,6 +259,7 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
             seedVersion: SEED_VERSION
           };
         });
+        syncPlayerRefFromSnapshot(backendPlayers);
         setSyncError(null);
         suppressRealtimeRef.current = false;
       } catch {
@@ -233,7 +274,7 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [syncPlayerRefFromSnapshot]);
 
   useEffect(() => {
     if (!state) {
@@ -254,20 +295,39 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
       }
     };
 
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "hidden" && pendingPlayerSyncRef.current) {
+        void flushPlayerSync();
+      }
+    };
+
     window.addEventListener("focus", handleRetry);
     window.addEventListener("online", handleRetry);
+    window.addEventListener("pagehide", handleRetry);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       window.removeEventListener("focus", handleRetry);
       window.removeEventListener("online", handleRetry);
+      window.removeEventListener("pagehide", handleRetry);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [flushPlayerSync]);
 
   useEffect(() => {
     if (pendingPlayerSyncRef.current) {
-      void flushPlayerSync();
+      schedulePlayerSync();
     }
-  }, [flushPlayerSync]);
+  }, [schedulePlayerSync]);
+
+  useEffect(
+    () => () => {
+      if (syncTimeoutRef.current) {
+        clearTimeout(syncTimeoutRef.current);
+      }
+    },
+    []
+  );
 
   useEffect(() => {
     if (!hasSupabaseBrowserConfig()) {
@@ -277,11 +337,17 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
     const supabase = getSupabaseBrowserClient();
     let active = true;
     let channel: RealtimeChannel | null = null;
-
-    async function refreshPlayersFromRealtime() {
+    const runRefresh = async () => {
       if (suppressRealtimeRef.current) {
         return;
       }
+
+      if (refreshInFlightRef.current) {
+        refreshQueuedRef.current = true;
+        return;
+      }
+
+      refreshInFlightRef.current = true;
 
       try {
         const backendPlayers = await fetchSupabasePlayers();
@@ -306,6 +372,7 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
             seedVersion: SEED_VERSION
           };
         });
+        syncPlayerRefFromSnapshot(backendPlayers);
         setSyncError((current) =>
           current === "Unable to load roster from Supabase. Using local data." ? null : current
         );
@@ -313,8 +380,30 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
         if (active) {
           setSyncError("Unable to refresh roster from Supabase. Using local data.");
         }
+      } finally {
+        refreshInFlightRef.current = false;
+
+        if (refreshQueuedRef.current && active) {
+          refreshQueuedRef.current = false;
+          void runRefresh();
+        }
       }
-    }
+    };
+
+    const scheduleRefresh = () => {
+      if (suppressRealtimeRef.current) {
+        return;
+      }
+
+      if (refreshTimeoutRef.current) {
+        clearTimeout(refreshTimeoutRef.current);
+      }
+
+      refreshTimeoutRef.current = setTimeout(() => {
+        refreshTimeoutRef.current = null;
+        void runRefresh();
+      }, 150);
+    };
 
     channel = supabase
       .channel("tcb-players")
@@ -322,18 +411,22 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
         "postgres_changes",
         { event: "*", schema: "public", table: "players" },
         () => {
-          void refreshPlayersFromRealtime();
+          scheduleRefresh();
         }
       )
       .subscribe();
 
     return () => {
       active = false;
+      if (refreshTimeoutRef.current) {
+        clearTimeout(refreshTimeoutRef.current);
+        refreshTimeoutRef.current = null;
+      }
       if (channel) {
         void supabase.removeChannel(channel);
       }
     };
-  }, []);
+  }, [syncPlayerRefFromSnapshot]);
 
   const applyPlayerUpdate = useCallback(
     (updater: (players: Player[]) => Player[]) => {
