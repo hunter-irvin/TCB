@@ -72,7 +72,7 @@ function areWidthsEqual(
 }
 
 function RosterContent() {
-  const { loading, players, togglePlayerPosition, updatePlayerAttribute, updatePlayerName } =
+  const { loading, players, retrySync, syncError, togglePlayerPosition, updatePlayerAttribute, updatePlayerName } =
     useTournamentBuilder();
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [columnWidths, setColumnWidths] = useState(() =>
@@ -111,6 +111,11 @@ function RosterContent() {
         <div className="status-chip">
           {loading ? "Loading roster seed..." : "Changes save in this browser automatically"}
         </div>
+        {syncError ? (
+          <button type="button" className="status-chip error" onClick={retrySync}>
+            {syncError} Retry sync
+          </button>
+        ) : null}
       </div>
       <section className="panel table-shell">
         <div ref={wrapRef} className="roster-sheet-wrap">
