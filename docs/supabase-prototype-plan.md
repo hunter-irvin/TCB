@@ -18,13 +18,13 @@ This plan intentionally avoids authentication. All users are treated equally and
 | Phase 1: Add Supabase client configuration | Completed | No |
 | Phase 2: Create database schema | Completed | Yes |
 | Phase 3: Seed baseline data | Completed | Yes |
-| Phase 4: Replace roster reads | Planned | No |
-| Phase 5: Replace roster writes | Planned | No |
-| Phase 6: Replace scenario reads | Planned | No |
-| Phase 7: Replace scenario writes | Planned | No |
-| Phase 8: Add realtime subscriptions | Planned | No |
-| Phase 9: Add failure queue and retry behavior | Planned | No |
-| Phase 10: Remove local-storage-first assumptions | Planned | No |
+| Phase 4: Replace roster reads | Completed | No |
+| Phase 5: Replace roster writes | Completed | No |
+| Phase 6: Replace scenario reads | Completed | No |
+| Phase 7: Replace scenario writes | Completed | No |
+| Phase 8: Add realtime subscriptions | Completed | No |
+| Phase 9: Add failure queue and retry behavior | Completed | No |
+| Phase 10: Remove local-storage-first assumptions | Completed | No |
 
 ## Scope
 
