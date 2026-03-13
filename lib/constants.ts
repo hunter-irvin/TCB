@@ -265,6 +265,33 @@ export const DEFAULT_PLAYER_ATTRIBUTES_BY_ROW: Record<number, PlayerAttributes> 
   }
 };
 
+export const DEFAULT_PLAYER_SEEDS: Array<{
+  rowNumber: number;
+  name: string;
+  positions: Position[];
+}> = [
+  { rowNumber: 1, name: "Alon A", positions: [1] },
+  { rowNumber: 2, name: "David J", positions: [1] },
+  { rowNumber: 3, name: "Juwan R", positions: [1] },
+  { rowNumber: 4, name: "Nick P-S", positions: [1] },
+  { rowNumber: 5, name: "Thomas A", positions: [2] },
+  { rowNumber: 6, name: "Eric W", positions: [2] },
+  { rowNumber: 7, name: "Lucas P", positions: [2] },
+  { rowNumber: 8, name: "Jake P", positions: [2] },
+  { rowNumber: 9, name: "Tano T", positions: [3] },
+  { rowNumber: 10, name: "Aaron M", positions: [3] },
+  { rowNumber: 11, name: "Leib S", positions: [3] },
+  { rowNumber: 12, name: "Hunter I", positions: [3] },
+  { rowNumber: 13, name: "Zach B", positions: [4] },
+  { rowNumber: 14, name: "Noel", positions: [4] },
+  { rowNumber: 15, name: "Kiyoshi M", positions: [4] },
+  { rowNumber: 16, name: "Joe S", positions: [4] },
+  { rowNumber: 17, name: "Henry K", positions: [5] },
+  { rowNumber: 18, name: "Nes", positions: [5] },
+  { rowNumber: 19, name: "Sam", positions: [5] },
+  { rowNumber: 20, name: "Yonaton", positions: [5] }
+];
+
 export const TEAMS: Team[] = [
   { id: "dawgs", name: "Dave's Dawgs", color: "var(--dawgs)" },
   { id: "rangers", name: "Alon's Rangers", color: "var(--rangers)" },

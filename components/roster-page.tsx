@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AppShell } from "@/components/app-shell";
 import { TournamentBuilderProvider, useTournamentBuilder } from "@/components/tournament-builder";
 import { PLAYER_ATTRIBUTE_GROUPS, POSITIONS } from "@/lib/constants";
 import type {
+  Player,
   PlayerAttributeKey,
   PlayerAttributeRating,
   PlayerAttributes,
@@ -40,6 +41,14 @@ const ROSTER_TOTAL_WEIGHT =
   ROSTER_EXTRA_WEIGHTS.positions +
   ROSTER_EXTRA_WEIGHTS.attribute * ATTRIBUTE_COUNT;
 
+type RosterSortKey = "name" | "positions" | PlayerAttributeKey;
+type RosterSortDirection = "asc" | "desc";
+
+type RosterSortState = {
+  key: RosterSortKey;
+  direction: RosterSortDirection;
+} | null;
+
 function getRosterColumnWidths(containerWidth: number) {
   const tableWidth = Math.max(containerWidth, ROSTER_MIN_TABLE_WIDTH);
   const extraWidth = tableWidth - ROSTER_MIN_TABLE_WIDTH;
@@ -71,13 +80,115 @@ function areWidthsEqual(
   );
 }
 
+function getPlayerNameForSort(player: Player) {
+  return player.name.trim().toLocaleLowerCase();
+}
+
+function compareAlphabetical(left: Player, right: Player) {
+  const nameCompare = getPlayerNameForSort(left).localeCompare(getPlayerNameForSort(right));
+  if (nameCompare !== 0) {
+    return nameCompare;
+  }
+
+  return left.rowNumber - right.rowNumber;
+}
+
+function getLowestPosition(positions: Position[]) {
+  return positions.length > 0 ? Math.min(...positions) : null;
+}
+
+function compareNullableNumbers(
+  left: number | null,
+  right: number | null,
+  direction: RosterSortDirection
+) {
+  if (left === null && right === null) {
+    return 0;
+  }
+
+  if (left === null) {
+    return 1;
+  }
+
+  if (right === null) {
+    return -1;
+  }
+
+  return direction === "asc" ? left - right : right - left;
+}
+
+function sortPlayers(players: Player[], sortState: RosterSortState) {
+  if (!sortState) {
+    return players;
+  }
+
+  const nextPlayers = [...players];
+
+  nextPlayers.sort((left, right) => {
+    let primary = 0;
+
+    if (sortState.key === "name") {
+      primary =
+        sortState.direction === "asc"
+          ? getPlayerNameForSort(left).localeCompare(getPlayerNameForSort(right))
+          : getPlayerNameForSort(right).localeCompare(getPlayerNameForSort(left));
+    } else if (sortState.key === "positions") {
+      primary = compareNullableNumbers(
+        getLowestPosition(left.positions),
+        getLowestPosition(right.positions),
+        sortState.direction
+      );
+    } else {
+      primary = compareNullableNumbers(
+        left.attributes[sortState.key],
+        right.attributes[sortState.key],
+        sortState.direction
+      );
+    }
+
+    if (primary !== 0) {
+      return primary;
+    }
+
+    return compareAlphabetical(left, right);
+  });
+
+  return nextPlayers;
+}
+
+function getInitialSortDirection(key: RosterSortKey): RosterSortDirection {
+  if (key === "name" || key === "positions") {
+    return "asc";
+  }
+
+  return "desc";
+}
+
 function RosterContent() {
   const { loading, players, retrySync, syncError, togglePlayerPosition, updatePlayerAttribute, updatePlayerName } =
     useTournamentBuilder();
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [sortState, setSortState] = useState<RosterSortState>(null);
   const [columnWidths, setColumnWidths] = useState(() =>
     getRosterColumnWidths(ROSTER_MIN_TABLE_WIDTH)
   );
+  const displayedPlayers = useMemo(() => sortPlayers(players, sortState), [players, sortState]);
+
+  const handleSort = (key: RosterSortKey) => {
+    setSortState((current) => {
+      if (current?.key === key) {
+        return {
+          key,
+          direction: current.direction === "asc" ? "desc" : "asc"
+        };
+      }
+
+      return {
+        key,
+        direction: getInitialSortDirection(key)
+      };
+    });
+  };
 
   useEffect(() => {
     const wrapElement = wrapRef.current;
@@ -104,8 +215,8 @@ function RosterContent() {
 
   return (
     <AppShell
-      title="Roster Builder"
-      copy="Edit names, eligible positions, and player ratings here. Team assignment options update from this roster automatically."
+      title="Roster"
+      copy="Edit names, eligible positions, and player ratings here."
     >
       <div className="status-bar">
         <div className="status-chip">
@@ -148,24 +259,67 @@ function RosterContent() {
                 ))}
               </tr>
               <tr>
-                <th className="roster-head-cell row-number">#</th>
-                <th className="roster-head-cell name">Player</th>
-                <th className="roster-head-cell positions">Pos.</th>
+                <th className="roster-head-cell row-number" aria-label="Row count" />
+                <th className="roster-head-cell name">
+                  <button
+                    type="button"
+                    className={`roster-sort-button${sortState?.key === "name" ? " active" : ""}`}
+                    onClick={() => handleSort("name")}
+                  >
+                    Player
+                    <span className="roster-sort-indicator" aria-hidden="true">
+                      {sortState?.key === "name"
+                        ? sortState.direction === "asc"
+                          ? "↑"
+                          : "↓"
+                        : "↕"}
+                    </span>
+                  </button>
+                </th>
+                <th className="roster-head-cell positions">
+                  <button
+                    type="button"
+                    className={`roster-sort-button${sortState?.key === "positions" ? " active" : ""}`}
+                    onClick={() => handleSort("positions")}
+                  >
+                    Pos.
+                    <span className="roster-sort-indicator" aria-hidden="true">
+                      {sortState?.key === "positions"
+                        ? sortState.direction === "asc"
+                          ? "↑"
+                          : "↓"
+                        : "↕"}
+                    </span>
+                  </button>
+                </th>
                 {PLAYER_ATTRIBUTE_GROUPS.flatMap((group) =>
                   group.attributes.map((attribute) => (
                     <th key={attribute.key} className="roster-head-cell attribute">
-                      {attribute.label}
+                      <button
+                        type="button"
+                        className={`roster-sort-button${sortState?.key === attribute.key ? " active" : ""}`}
+                        onClick={() => handleSort(attribute.key)}
+                      >
+                        {attribute.label}
+                        <span className="roster-sort-indicator" aria-hidden="true">
+                          {sortState?.key === attribute.key
+                            ? sortState.direction === "asc"
+                              ? "↑"
+                              : "↓"
+                            : "↕"}
+                        </span>
+                      </button>
                     </th>
                   ))
                 )}
               </tr>
             </thead>
             <tbody>
-              {players.map((player) => (
+              {displayedPlayers.map((player, index) => (
                 <RosterRow
                   key={player.id}
                   id={player.id}
-                  rowNumber={player.rowNumber}
+                  displayIndex={index + 1}
                   name={player.name}
                   positions={player.positions}
                   attributes={player.attributes}
@@ -185,7 +339,7 @@ function RosterContent() {
 
 function RosterRow({
   id,
-  rowNumber,
+  displayIndex,
   name,
   positions,
   attributes,
@@ -195,7 +349,7 @@ function RosterRow({
   onAttributeChange
 }: {
   id: number;
-  rowNumber: number;
+  displayIndex: number;
   name: string;
   positions: Position[];
   attributes: PlayerAttributes;
@@ -210,11 +364,11 @@ function RosterRow({
 }) {
   return (
     <tr>
-      <td className="roster-rownum">{rowNumber}</td>
+      <td className="roster-rownum">{displayIndex}</td>
       <td className="roster-name-cell">
         <input
           className="roster-name"
-          aria-label={`Player ${rowNumber} name`}
+          aria-label={`Player ${displayIndex} name`}
           value={name}
           onChange={(event) => onNameChange(id, event.target.value)}
           onBlur={onNameBlur}
@@ -222,7 +376,7 @@ function RosterRow({
         />
       </td>
       <td className="roster-positions-cell">
-        <div className="multi-select" role="group" aria-label={`Player ${rowNumber} positions`}>
+        <div className="multi-select" role="group" aria-label={`Player ${displayIndex} positions`}>
           {POSITIONS.map((position) => {
             const active = positions.includes(position);
             return (
@@ -244,7 +398,7 @@ function RosterRow({
           <td key={attribute.key} className="roster-attribute-cell">
             <select
               className="roster-attribute-select"
-              aria-label={`Player ${rowNumber} ${attribute.label}`}
+              aria-label={`Player ${displayIndex} ${attribute.label}`}
               value={attributes[attribute.key] ?? ""}
               onChange={(event) =>
                 onAttributeChange(

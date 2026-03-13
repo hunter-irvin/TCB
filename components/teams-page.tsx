@@ -4,7 +4,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { createPortal } from "react-dom";
 import { AppShell } from "@/components/app-shell";
 import { TournamentBuilderProvider, useTournamentBuilder } from "@/components/tournament-builder";
-import { POSITIONS, TEAMS } from "@/lib/constants";
+import { PLAYER_ATTRIBUTE_GROUPS, POSITIONS, TEAMS } from "@/lib/constants";
 import { getSupabaseBrowserClient, hasSupabaseBrowserConfig } from "@/lib/supabase/browser";
 import {
   areAssignmentsEqual,
@@ -27,7 +27,16 @@ import {
   getEligiblePlayers,
   pruneAssignments
 } from "@/lib/state";
-import type { Assignments, PersistedScenarioState, Player, Position, Scenario, SlotDescriptor, Team } from "@/lib/types";
+import type {
+  Assignments,
+  PersistedScenarioState,
+  Player,
+  PlayerAttributeKey,
+  Position,
+  Scenario,
+  SlotDescriptor,
+  Team
+} from "@/lib/types";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import type { MouseEvent as ReactMouseEvent } from "react";
 
@@ -68,6 +77,24 @@ type ScenarioReorderState = {
 type StartDragFn = (playerId: number, chipNode: HTMLDivElement) => void;
 const SCENARIO_SYNC_DEBOUNCE_MS = 2000;
 
+type TeamAttributeStack = {
+  team: Team;
+  total: number;
+  segments: Array<{
+    key: PlayerAttributeKey;
+    label: string;
+    value: number;
+  }>;
+};
+
+type ScenarioAttributeChart = {
+  label: string;
+  tone: "offense" | "defense" | "misc";
+  stacks: TeamAttributeStack[];
+};
+
+const SCENARIO_CHART_MAX_TOTAL = 75;
+
 function createScenario(index: number): Scenario {
   return {
     id: createScenarioId(),
@@ -75,6 +102,140 @@ function createScenario(index: number): Scenario {
     assignments: createEmptyAssignments(),
     collapsed: false
   };
+}
+
+function buildScenarioAttributeCharts(
+  assignments: Assignments,
+  playersById: Map<number, Player>
+): ScenarioAttributeChart[] {
+  return PLAYER_ATTRIBUTE_GROUPS.map((group) => {
+    const stacks = TEAMS.map((team) => {
+      const segments = group.attributes.map((attribute) => {
+        const value = POSITIONS.reduce((total, position) => {
+          const playerId = assignments[team.id][position];
+          const player = playerId ? playersById.get(playerId) ?? null : null;
+          return total + (player?.attributes[attribute.key] ?? 0);
+        }, 0);
+
+        return {
+          key: attribute.key,
+          label: attribute.label,
+          value
+        };
+      });
+
+      return {
+        team,
+        total: segments.reduce((sum, segment) => sum + segment.value, 0),
+        segments
+      };
+    });
+
+    return {
+      label: group.label,
+      tone: group.tone,
+      stacks
+    };
+  });
+}
+
+function getChartTeamLabelLines(name: string) {
+  const words = name.trim().split(/\s+/);
+  if (words.length <= 1) {
+    return [name];
+  }
+
+  return [words[0], words.slice(1).join(" ")];
+}
+
+function getChartSegmentColor(teamColor: string, index: number) {
+  const tintStrength = [92, 82, 72][index] ?? 72;
+  return `color-mix(in srgb, ${teamColor} ${tintStrength}%, white ${100 - tintStrength}%)`;
+}
+
+function cloneAssignments(assignments: Assignments): Assignments {
+  return Object.fromEntries(
+    Object.entries(assignments).map(([teamId, slots]) => [teamId, { ...slots }])
+  );
+}
+
+function shuffleArray<T>(items: T[]) {
+  const next = [...items];
+
+  for (let index = next.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [next[index], next[swapIndex]] = [next[swapIndex], next[index]];
+  }
+
+  return next;
+}
+
+function countFilledAssignments(assignments: Assignments) {
+  return Object.values(assignments).reduce(
+    (sum, slots) =>
+      sum + POSITIONS.reduce((slotSum, position) => slotSum + (slots[position] !== null ? 1 : 0), 0),
+    0
+  );
+}
+
+function randomizeRemainingAssignments(
+  assignments: Assignments,
+  availablePlayers: Player[],
+  retries: number
+) {
+  const emptySlots = TEAMS.flatMap((team) =>
+    POSITIONS.filter((position) => assignments[team.id][position] === null).map((position) => ({
+      teamId: team.id,
+      position
+    }))
+  );
+
+  if (emptySlots.length === 0 || availablePlayers.length === 0) {
+    return assignments;
+  }
+
+  let bestAssignments = assignments;
+  let bestScore = countFilledAssignments(assignments);
+
+  for (let attempt = 0; attempt <= retries; attempt += 1) {
+    const nextAssignments = cloneAssignments(assignments);
+    const remainingPlayers = shuffleArray(availablePlayers);
+    const slotOrder = shuffleArray(emptySlots).sort((left, right) => {
+      const leftCount = availablePlayers.filter((player) => player.positions.includes(left.position)).length;
+      const rightCount = availablePlayers.filter((player) =>
+        player.positions.includes(right.position)
+      ).length;
+      return leftCount - rightCount;
+    });
+
+    for (const slot of slotOrder) {
+      const eligiblePlayers = remainingPlayers.filter((player) => player.positions.includes(slot.position));
+      if (eligiblePlayers.length === 0) {
+        continue;
+      }
+
+      const selectedPlayer =
+        eligiblePlayers[Math.floor(Math.random() * eligiblePlayers.length)] ?? null;
+
+      if (!selectedPlayer) {
+        continue;
+      }
+
+      nextAssignments[slot.teamId][slot.position] = selectedPlayer.id;
+      const selectedIndex = remainingPlayers.findIndex((player) => player.id === selectedPlayer.id);
+      if (selectedIndex >= 0) {
+        remainingPlayers.splice(selectedIndex, 1);
+      }
+    }
+
+    const nextScore = countFilledAssignments(nextAssignments);
+    if (nextScore > bestScore) {
+      bestAssignments = nextAssignments;
+      bestScore = nextScore;
+    }
+  }
+
+  return bestAssignments;
 }
 
 function getScenarioMetaSignature(scenarios: Scenario[]) {
@@ -364,6 +525,7 @@ function TeamsContent() {
   const [nextScenarioNumber, setNextScenarioNumber] = useState(2);
   const [storageHydrated, setStorageHydrated] = useState(false);
   const [scenarioSyncError, setScenarioSyncError] = useState<string | null>(null);
+  const [randomizingScenarioId, setRandomizingScenarioId] = useState<string | null>(null);
   const [nearestSlot, setNearestSlot] = useState<NearestSlot>(null);
   const [animatedSlots, setAnimatedSlots] = useState<string[]>([]);
   const [dragState, setDragState] = useState<DragState | null>(null);
@@ -1078,6 +1240,43 @@ function TeamsContent() {
     updateScenarioAssignments(scenarioId, (assignments) => clearSlot(assignments, slot));
   };
 
+  const resetScenarioAssignments = (scenarioId: string) => {
+    setOpenPickerSlot(null);
+    setSelectedAvailablePlayer((current) => (current?.scenarioId === scenarioId ? null : current));
+    updateScenarioAssignments(scenarioId, () => createEmptyAssignments());
+  };
+
+  const randomizeScenarioRemainingPlayers = (scenarioId: string) => {
+    if (randomizingScenarioId) {
+      return;
+    }
+
+    const scenario = scenarioById.get(scenarioId);
+    const availablePlayers = availablePlayersByScenario.get(scenarioId) ?? [];
+    if (!scenario || availablePlayers.length === 0) {
+      return;
+    }
+
+    const hasEmptySlot = TEAMS.some((team) =>
+      POSITIONS.some((position) => scenario.assignments[team.id][position] === null)
+    );
+
+    if (!hasEmptySlot) {
+      return;
+    }
+
+    setRandomizingScenarioId(scenarioId);
+    setOpenPickerSlot(null);
+    setSelectedAvailablePlayer((current) => (current?.scenarioId === scenarioId ? null : current));
+
+    window.setTimeout(() => {
+      updateScenarioAssignments(scenarioId, (assignments) =>
+        randomizeRemainingAssignments(assignments, availablePlayers, 2)
+      );
+      setRandomizingScenarioId((current) => (current === scenarioId ? null : current));
+    }, 0);
+  };
+
   const beginScenarioReorder = (
     scenarioId: string,
     sectionNode: HTMLElement,
@@ -1417,6 +1616,7 @@ function TeamsContent() {
         {orderedScenarios.map((scenario) => {
           const displayedAssignments =
             displayedAssignmentsByScenario.get(scenario.id) ?? scenario.assignments;
+          const scenarioCharts = buildScenarioAttributeCharts(scenario.assignments, playerById);
           const availablePlayers = availablePlayersByScenario.get(scenario.id) ?? [];
           const currentNearestSlot = nearestSlot?.scenarioId === scenario.id ? nearestSlot : null;
           const currentOpenPickerSlot =
@@ -1425,6 +1625,13 @@ function TeamsContent() {
             selectedAvailablePlayer?.scenarioId === scenario.id
               ? selectedAvailablePlayer.playerId
               : null;
+          const isRandomizingScenario = randomizingScenarioId === scenario.id;
+          const hasOpenSlots = TEAMS.some((team) =>
+            POSITIONS.some((position) => scenario.assignments[team.id][position] === null)
+          );
+          const hasAssignedPlayers = TEAMS.some((team) =>
+            POSITIONS.some((position) => scenario.assignments[team.id][position] !== null)
+          );
           const scenarioCollapsed = Boolean(scenarioReorder) || scenario.collapsed;
           const scenarioIsDragging = scenarioReorder?.scenarioId === scenario.id;
 
@@ -1528,8 +1735,78 @@ function TeamsContent() {
                   <span className="scenario-toggle-icon" aria-hidden="true" />
                 </button>
               </div>
+              <div className="scenario-title-rule" aria-hidden="true" />
               <div className="scenario-body" aria-hidden={scenarioCollapsed}>
                 <div className="scenario-body-inner">
+                  <div
+                    ref={(node) => {
+                      if (node) {
+                        poolRefs.current.set(scenario.id, node);
+                      } else {
+                        poolRefs.current.delete(scenario.id);
+                      }
+                    }}
+                    className={`available-shell${poolDropScenarioId === scenario.id ? " pool-drop-active" : ""}`}
+                  >
+                    <div className="available-header">
+                      <h2 className="available-title">Player Pool</h2>
+                      <div className="available-actions">
+                        <button
+                          type="button"
+                          className="available-reset-button"
+                          onClick={() => resetScenarioAssignments(scenario.id)}
+                          disabled={isRandomizingScenario || !hasAssignedPlayers}
+                        >
+                          Reset
+                        </button>
+                        <button
+                          type="button"
+                          className="available-randomize-button"
+                          onClick={() => randomizeScenarioRemainingPlayers(scenario.id)}
+                          disabled={
+                            isRandomizingScenario ||
+                            availablePlayers.length === 0 ||
+                            !hasOpenSlots
+                          }
+                        >
+                          {isRandomizingScenario ? "Thinking..." : "Randomize Remaining"}
+                        </button>
+                      </div>
+                    </div>
+                    <div className="available-players">
+                      {availablePlayers.map((player) => {
+                        const isSelected = selectedAvailablePlayerId === player.id;
+                        return (
+                          <div
+                            key={player.id}
+                            className={`player-chip available-player-chip${isSelected ? " selected" : ""}`}
+                            title={player.name}
+                            onMouseDown={(event) =>
+                              bindChipPointerDown(
+                                event,
+                                player.id,
+                                event.currentTarget,
+                                (playerId, chipNode) => beginDrag(scenario.id, playerId, chipNode, null),
+                                () => {
+                                  setOpenPickerSlot(null);
+                                  setSelectedAvailablePlayer((current) =>
+                                    current?.scenarioId === scenario.id && current.playerId === player.id
+                                      ? null
+                                      : {
+                                          scenarioId: scenario.id,
+                                          playerId: player.id
+                                        }
+                                  );
+                                }
+                              )
+                            }
+                          >
+                            {formatPlayerLabel(player.name)}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
                   <div className="teams-grid">
                     {TEAMS.map((team) => (
                       <TeamColumn
@@ -1619,51 +1896,7 @@ function TeamsContent() {
                       />
                     ))}
                   </div>
-                  <div
-                    ref={(node) => {
-                      if (node) {
-                        poolRefs.current.set(scenario.id, node);
-                      } else {
-                        poolRefs.current.delete(scenario.id);
-                      }
-                    }}
-                    className={`available-shell${poolDropScenarioId === scenario.id ? " pool-drop-active" : ""}`}
-                  >
-                    <h2 className="available-title">Player Pool</h2>
-                    <div className="available-players">
-                      {availablePlayers.map((player) => {
-                        const isSelected = selectedAvailablePlayerId === player.id;
-                        return (
-                          <div
-                            key={player.id}
-                            className={`player-chip available-player-chip${isSelected ? " selected" : ""}`}
-                            title={player.name}
-                            onMouseDown={(event) =>
-                              bindChipPointerDown(
-                                event,
-                                player.id,
-                                event.currentTarget,
-                                (playerId, chipNode) => beginDrag(scenario.id, playerId, chipNode, null),
-                                () => {
-                                  setOpenPickerSlot(null);
-                                  setSelectedAvailablePlayer((current) =>
-                                    current?.scenarioId === scenario.id && current.playerId === player.id
-                                      ? null
-                                      : {
-                                          scenarioId: scenario.id,
-                                          playerId: player.id
-                                        }
-                                  );
-                                }
-                              )
-                            }
-                          >
-                            {formatPlayerLabel(player.name)}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
+                  <ScenarioAttributeCharts charts={scenarioCharts} />
                 </div>
               </div>
             </section>
@@ -1755,7 +1988,9 @@ function TeamColumn({
   return (
     <section className="team-card">
       <div className="team-name" style={{ background: team.color }}>
-        {team.name}
+        {getChartTeamLabelLines(team.name).map((line) => (
+          <span key={line}>{line}</span>
+        ))}
       </div>
       <div className="team-slots">
         {POSITIONS.map((position) => {
@@ -1855,6 +2090,50 @@ function TeamColumn({
           );
         })}
       </div>
+    </section>
+  );
+}
+
+function ScenarioAttributeCharts({ charts }: { charts: ScenarioAttributeChart[] }) {
+  return (
+    <section className="scenario-analytics" aria-label="Team totals by attribute category">
+      {charts.map((chart) => (
+        <div key={chart.label} className="scenario-chart-card">
+          <div className="scenario-chart-header">
+            <h2 className="scenario-chart-title">{chart.label}</h2>
+          </div>
+          <div className="scenario-chart-grid">
+            {chart.stacks.map((stack) => (
+              <div key={stack.team.id} className="scenario-chart-column">
+                <div className="scenario-chart-total">{stack.total}</div>
+                <div className="scenario-chart-bar">
+                  {stack.segments.map((segment, index) => (
+                    <div
+                      key={segment.key}
+                      className={`scenario-chart-segment tone-${chart.tone}`}
+                      tabIndex={0}
+                      aria-label={`${segment.label}: ${segment.value}`}
+                      style={{
+                        height: `${(segment.value / SCENARIO_CHART_MAX_TOTAL) * 100}%`,
+                        background: getChartSegmentColor(stack.team.color, index)
+                      }}
+                    >
+                      <span className="scenario-chart-tooltip">
+                        {segment.label}: {segment.value}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <div className="scenario-chart-team">
+                  {getChartTeamLabelLines(stack.team.name).map((line) => (
+                    <span key={line}>{line}</span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
     </section>
   );
 }

@@ -10,10 +10,10 @@ import {
   useState
 } from "react";
 import { ROSTER_SIZE, SEED_VERSION, STORAGE_KEY } from "@/lib/constants";
-import { parseRosterCsv } from "@/lib/csv";
 import {
   assignPlayerToSlot,
   clearSlot,
+  createDefaultPlayers,
   createEmptyAssignments,
   createEmptyPlayerAttributes,
   createInitialState,
@@ -69,12 +69,6 @@ function makeBlankPlayers(): Player[] {
 function canAssignPlayerToSlot(players: Player[], playerId: number, slot: SlotDescriptor): boolean {
   const player = players.find((candidate) => candidate.id === playerId);
   return Boolean(player && player.positions.includes(slot.position) && player.name.trim());
-}
-
-async function loadSeedPlayers() {
-  const response = await fetch("/api/seed-roster", { cache: "no-store" });
-  const csv = await response.text();
-  return parseRosterCsv(csv);
 }
 
 async function fetchSupabasePlayers() {
@@ -218,7 +212,7 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
       }
 
       if (!localState) {
-        const seeded = createInitialState(await loadSeedPlayers());
+        const seeded = createInitialState(createDefaultPlayers());
         if (!cancelled) {
           setState(seeded);
           setLoading(false);
@@ -230,7 +224,7 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
       }
 
       try {
-        const seedPlayers = await loadSeedPlayers();
+        const seedPlayers = createDefaultPlayers();
         const backendPlayers = await fetchSupabasePlayers();
         if (cancelled) {
           return;

@@ -209,6 +209,36 @@ select {
   background: rgba(232, 229, 220, 0.92);
 }
 
+.roster-sort-button {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+
+.roster-sort-button.active {
+  color: #121712;
+}
+
+.roster-sort-indicator {
+  font-size: 0.74rem;
+  line-height: 1;
+  opacity: 0.58;
+}
+
+.roster-sort-button.active .roster-sort-indicator {
+  opacity: 1;
+}
+
 .roster-head-cell.row-number {
   border-radius: 10px 0 0 10px;
   min-width: 28px;
@@ -217,6 +247,10 @@ select {
 .roster-head-cell.name {
   min-width: 150px;
   text-align: left;
+}
+
+.roster-head-cell.name .roster-sort-button {
+  justify-content: flex-start;
 }
 
 .roster-head-cell.positions {
@@ -328,7 +362,7 @@ select {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 18px;
+  margin-bottom: 8px;
   cursor: grab;
 }
 
@@ -340,14 +374,15 @@ select {
   flex: 1 1 auto;
   width: 100%;
   border: 0;
-  padding: 0;
+  border-bottom: 1px solid rgba(248, 245, 234, 0.28);
+  padding: 0 0 8px;
   background: transparent;
   color: var(--text);
   font-size: clamp(1.55rem, 2.8vw, 2.1rem);
   font-weight: 800;
   line-height: 1.1;
   outline: none;
-  cursor: grab;
+  cursor: text;
 }
 
 .scenario-title-input::placeholder {
@@ -356,10 +391,22 @@ select {
 
 .scenario-title-input:focus {
   cursor: text;
+  border-bottom-color: rgba(248, 245, 234, 0.7);
 }
 
 .scenario-title-input:active {
-  cursor: grabbing;
+  cursor: text;
+}
+
+.scenario-title-rule {
+  height: 1px;
+  margin-bottom: 18px;
+  background: linear-gradient(
+    90deg,
+    rgba(248, 245, 234, 0.38),
+    rgba(248, 245, 234, 0.08) 72%,
+    transparent
+  );
 }
 
 .scenario-toggle {
@@ -424,6 +471,8 @@ select {
 
 .scenario-body-inner {
   overflow: hidden;
+  display: grid;
+  gap: 22px;
 }
 
 .board-shell.collapsed .scenario-body {
@@ -471,14 +520,22 @@ select {
 }
 
 .team-name {
+  display: grid;
+  align-content: center;
+  justify-items: center;
   min-height: 72px;
-  padding: 18px 14px;
+  padding: 14px 14px;
   border-radius: 14px;
   color: #1c201d;
   text-align: center;
   font-weight: 800;
-  line-height: 1.15;
+  font-size: clamp(1.1rem, 1rem + 0.45vw, 1.45rem);
+  line-height: 1.02;
   margin-bottom: 14px;
+}
+
+.team-name span {
+  display: block;
 }
 
 .team-slots {
@@ -677,9 +734,9 @@ select {
 }
 
 .available-shell {
-  margin-top: 22px;
-  padding-top: 18px;
-  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  margin-bottom: 0;
+  padding-bottom: 18px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
   transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
 }
 
@@ -688,11 +745,234 @@ select {
   transform: translateY(-1px);
 }
 
+.available-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.available-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .available-title {
-  margin: 0 0 14px;
+  margin: 0;
   color: var(--text);
   font-size: 1rem;
   font-weight: 800;
+}
+
+.available-randomize-button {
+  border: 0;
+  border-radius: 999px;
+  padding: 10px 16px;
+  background: #b74141;
+  color: #f8f5ea;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 10px 20px rgba(183, 65, 65, 0.24);
+  transition: transform 140ms ease, box-shadow 140ms ease, filter 140ms ease, opacity 140ms ease;
+}
+
+.available-randomize-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 24px rgba(183, 65, 65, 0.28);
+  filter: brightness(1.04);
+}
+
+.available-randomize-button:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.72);
+  outline-offset: 3px;
+}
+
+.available-randomize-button:disabled {
+  opacity: 0.56;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.available-reset-button {
+  border: 0;
+  border-radius: 999px;
+  padding: 10px 16px;
+  background: rgba(255, 255, 255, 0.96);
+  color: #171c18;
+  font-weight: 800;
+  cursor: pointer;
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.12);
+  transition: transform 140ms ease, box-shadow 140ms ease, filter 140ms ease, opacity 140ms ease;
+}
+
+.available-reset-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 24px rgba(0, 0, 0, 0.16);
+  filter: brightness(1.01);
+}
+
+.available-reset-button:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.72);
+  outline-offset: 3px;
+}
+
+.available-reset-button:disabled {
+  opacity: 0.56;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.scenario-analytics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  padding-top: 2px;
+}
+
+.scenario-chart-card {
+  padding: 14px 14px 16px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.scenario-chart-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.scenario-chart-title {
+  margin: 0;
+  font-size: 0.98rem;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.scenario-chart-scale {
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.scenario-chart-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  align-items: end;
+}
+
+.scenario-chart-column {
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  overflow: visible;
+}
+
+.scenario-chart-total {
+  font-size: 0.82rem;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.scenario-chart-bar {
+  position: relative;
+  display: flex;
+  flex-direction: column-reverse;
+  justify-content: flex-start;
+  width: 100%;
+  max-width: 58px;
+  height: 176px;
+  border-radius: 14px;
+  overflow: visible;
+  background: rgba(7, 30, 15, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.08);
+  isolation: isolate;
+}
+
+.scenario-chart-segment {
+  position: relative;
+  z-index: 1;
+  min-height: 0;
+  border-top: 1px solid rgba(12, 21, 14, 0.18);
+  transition: transform 140ms ease, box-shadow 140ms ease, filter 140ms ease;
+  outline: none;
+}
+
+.scenario-chart-segment:first-child {
+  border-bottom-left-radius: 13px;
+  border-bottom-right-radius: 13px;
+}
+
+.scenario-chart-segment:last-child {
+  border-top-left-radius: 13px;
+  border-top-right-radius: 13px;
+}
+
+.scenario-chart-segment:hover,
+.scenario-chart-segment:focus-visible {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 14px rgba(0, 0, 0, 0.28);
+  filter: saturate(1.08) brightness(1.03);
+  z-index: 3;
+}
+
+.scenario-chart-tooltip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  transform: translate(-50%, 4px);
+  opacity: 0;
+  pointer-events: none;
+  white-space: nowrap;
+  border-radius: 10px;
+  padding: 6px 10px;
+  background: rgba(6, 8, 7, 0.94);
+  color: #f8f5ea;
+  font-size: 0.76rem;
+  font-weight: 800;
+  line-height: 1;
+  box-shadow: 0 14px 24px rgba(0, 0, 0, 0.32);
+  transition: opacity 140ms ease, transform 140ms ease;
+  z-index: 4;
+}
+
+.scenario-chart-tooltip::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  transform: translateX(-50%);
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 6px solid rgba(6, 8, 7, 0.94);
+}
+
+.scenario-chart-segment:hover .scenario-chart-tooltip,
+.scenario-chart-segment:focus-visible .scenario-chart-tooltip {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.scenario-chart-team {
+  display: grid;
+  align-content: start;
+  justify-items: center;
+  min-height: calc(2 * 1.2em);
+  font-size: 0.76rem;
+  line-height: 1.2;
+  font-weight: 700;
+  color: var(--muted);
+  text-align: center;
+}
+
+.scenario-chart-team span {
+  display: block;
 }
 
 .available-players {
@@ -792,6 +1072,10 @@ select {
   .teams-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .scenario-analytics {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 840px) {
@@ -812,5 +1096,13 @@ select {
 
   .tab {
     min-width: 108px;
+  }
+
+  .scenario-chart-grid {
+    gap: 10px;
+  }
+
+  .scenario-chart-bar {
+    max-width: none;
   }
 }

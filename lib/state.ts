@@ -1,7 +1,9 @@
 import {
+  DEFAULT_PLAYER_SEEDS,
   DEFAULT_PLAYER_ATTRIBUTES_BY_ROW,
   PLAYER_ATTRIBUTE_GROUPS,
   POSITIONS,
+  ROSTER_SIZE,
   SEED_VERSION,
   TEAMS
 } from "@/lib/constants";
@@ -65,6 +67,29 @@ export function createInitialState(players: Player[]): AppState {
     assignments: createEmptyAssignments(),
     seedVersion: SEED_VERSION
   };
+}
+
+export function createDefaultPlayers(): Player[] {
+  const players = DEFAULT_PLAYER_SEEDS.map((seed) => ({
+    id: seed.rowNumber,
+    rowNumber: seed.rowNumber,
+    name: seed.name,
+    positions: [...seed.positions],
+    attributes: getDefaultPlayerAttributes(seed.rowNumber)
+  }));
+
+  while (players.length < ROSTER_SIZE) {
+    const next = players.length + 1;
+    players.push({
+      id: next,
+      rowNumber: next,
+      name: "",
+      positions: [],
+      attributes: createEmptyPlayerAttributes()
+    });
+  }
+
+  return players.slice(0, ROSTER_SIZE);
 }
 
 export function sanitizePlayers(players: Player[]): Player[] {
