@@ -17,9 +17,9 @@ export const PLAYER_ATTRIBUTE_GROUPS: Array<{
     label: "Offense",
     tone: "offense",
     attributes: [
-      { key: "shooting", label: "Shooting" },
-      { key: "driving", label: "Driving" },
-      { key: "assisting", label: "Assisting" }
+      { key: "shooting", label: "3PT Shooting" },
+      { key: "driving", label: "Offense Creation" },
+      { key: "assisting", label: "Passing" }
     ]
   },
   {
@@ -28,14 +28,14 @@ export const PLAYER_ATTRIBUTE_GROUPS: Array<{
     attributes: [
       { key: "manDefense", label: "Man Defense" },
       { key: "helpDefense", label: "Help Defense" },
-      { key: "shotBlocking", label: "Shot Blocking" }
+      { key: "shotBlocking", label: "Contesting Shots" }
     ]
   },
   {
     label: "Misc",
     tone: "misc",
     attributes: [
-      { key: "playmaking", label: "Playmaking" },
+      { key: "playmaking", label: "Activity Level" },
       { key: "rebounding", label: "Rebounding" },
       { key: "transition", label: "Transition" }
     ]

@@ -3,7 +3,6 @@ import {
   DEFAULT_PLAYER_ATTRIBUTES_BY_ROW,
   PLAYER_ATTRIBUTE_GROUPS,
   POSITIONS,
-  ROSTER_SIZE,
   SEED_VERSION,
   TEAMS
 } from "@/lib/constants";
@@ -70,42 +69,90 @@ export function createInitialState(players: Player[]): AppState {
 }
 
 export function createDefaultPlayers(): Player[] {
-  const players = DEFAULT_PLAYER_SEEDS.map((seed) => ({
+  return DEFAULT_PLAYER_SEEDS.map((seed) => ({
     id: seed.rowNumber,
     rowNumber: seed.rowNumber,
     name: seed.name,
     positions: [...seed.positions],
     attributes: getDefaultPlayerAttributes(seed.rowNumber)
   }));
-
-  while (players.length < ROSTER_SIZE) {
-    const next = players.length + 1;
-    players.push({
-      id: next,
-      rowNumber: next,
-      name: "",
-      positions: [],
-      attributes: createEmptyPlayerAttributes()
-    });
-  }
-
-  return players.slice(0, ROSTER_SIZE);
 }
 
 export function sanitizePlayers(players: Player[]): Player[] {
-  return players.map((player, index) => ({
-    ...player,
-    id: player.id ?? index + 1,
-    rowNumber: Number(player.rowNumber) || index + 1,
-    name: player.name ?? "",
-    positions: [...new Set(player.positions)].sort((a, b) => a - b) as Position[],
-    attributes: (() => {
-      const nextAttributes = sanitizePlayerAttributes(player.attributes);
-      return hasAnyPlayerAttribute(nextAttributes)
-        ? nextAttributes
-        : getDefaultPlayerAttributes(Number(player.rowNumber) || index + 1);
-    })()
-  }));
+  return players
+    .map((player, index) => {
+      const rowNumber = Number(player.rowNumber) || index + 1;
+      return {
+        ...player,
+        id: player.id ?? index + 1,
+        rowNumber,
+        name: player.name ?? "",
+        positions: [...new Set(player.positions)].sort((a, b) => a - b) as Position[],
+        attributes: (() => {
+          const nextAttributes = sanitizePlayerAttributes(player.attributes);
+          return hasAnyPlayerAttribute(nextAttributes)
+            ? nextAttributes
+            : getDefaultPlayerAttributes(rowNumber);
+        })()
+      };
+    })
+    .sort((left, right) => left.rowNumber - right.rowNumber);
+}
+
+export function getNextPlayerRowNumber(players: Player[]) {
+  return players.reduce((maxRowNumber, player) => Math.max(maxRowNumber, player.rowNumber), 0) + 1;
+}
+
+export function getNextTemporaryPlayerId(players: Player[]) {
+  const minimumId = players.reduce((minimum, player) => Math.min(minimum, player.id), 0);
+  return minimumId <= 0 ? minimumId - 1 : -1;
+}
+
+export function createPlayerDraft(players: Player[]): Player {
+  const rowNumber = getNextPlayerRowNumber(players);
+  return {
+    id: getNextTemporaryPlayerId(players),
+    rowNumber,
+    name: "",
+    positions: [],
+    attributes: createEmptyPlayerAttributes()
+  };
+}
+
+export function remapPlayersById(players: Player[], idMap: ReadonlyMap<number, number>): Player[] {
+  if (idMap.size === 0) {
+    return players;
+  }
+
+  return players.map((player) =>
+    idMap.has(player.id)
+      ? {
+          ...player,
+          id: idMap.get(player.id) ?? player.id
+        }
+      : player
+  );
+}
+
+export function remapAssignmentsByPlayerId(
+  assignments: Assignments,
+  idMap: ReadonlyMap<number, number>
+): Assignments {
+  if (idMap.size === 0) {
+    return assignments;
+  }
+
+  return Object.fromEntries(
+    Object.entries(assignments).map(([teamId, slots]) => [
+      teamId,
+      Object.fromEntries(
+        POSITIONS.map((position) => {
+          const playerId = slots[position];
+          return [position, playerId === null ? null : (idMap.get(playerId) ?? playerId)];
+        })
+      )
+    ])
+  ) as Assignments;
 }
 
 export function findPlayerSlot(assignments: Assignments, playerId: number): SlotDescriptor | null {

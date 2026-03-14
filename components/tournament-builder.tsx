@@ -9,20 +9,28 @@ import {
   useRef,
   useState
 } from "react";
-import { ROSTER_SIZE, SEED_VERSION, STORAGE_KEY } from "@/lib/constants";
+import { SEED_VERSION, STORAGE_KEY } from "@/lib/constants";
 import {
   assignPlayerToSlot,
   clearSlot,
+  createPlayerDraft,
   createDefaultPlayers,
   createEmptyAssignments,
-  createEmptyPlayerAttributes,
   createInitialState,
   getEligiblePlayers,
   pruneAssignments,
+  remapAssignmentsByPlayerId,
+  remapPlayersById,
   sanitizePlayers
 } from "@/lib/state";
 import { getSupabaseBrowserClient, hasSupabaseBrowserConfig } from "@/lib/supabase/browser";
-import { arePlayersEqual, playerToRow, playersFromRows } from "@/lib/supabase/tcb";
+import {
+  PLAYER_SELECT_COLUMNS,
+  arePlayersEqual,
+  playerToInsertRow,
+  playerToRow,
+  playersFromRows
+} from "@/lib/supabase/tcb";
 import type {
   AppState,
   Assignments,
@@ -41,6 +49,8 @@ type BuilderContextValue = {
   assignments: Assignments;
   syncError: string | null;
   retrySync: () => void;
+  addPlayer: () => number | null;
+  deletePlayer: (playerId: number) => void;
   updatePlayerName: (playerId: number, name: string) => void;
   togglePlayerPosition: (playerId: number, position: Position) => void;
   updatePlayerAttribute: (
@@ -56,16 +66,6 @@ type BuilderContextValue = {
 const BuilderContext = createContext<BuilderContextValue | null>(null);
 const PLAYER_SYNC_DEBOUNCE_MS = 2000;
 
-function makeBlankPlayers(): Player[] {
-  return Array.from({ length: ROSTER_SIZE }, (_, index) => ({
-    id: index + 1,
-    rowNumber: index + 1,
-    name: "",
-    positions: [],
-    attributes: createEmptyPlayerAttributes()
-  }));
-}
-
 function canAssignPlayerToSlot(players: Player[], playerId: number, slot: SlotDescriptor): boolean {
   const player = players.find((candidate) => candidate.id === playerId);
   return Boolean(player && player.positions.includes(slot.position) && player.name.trim());
@@ -75,9 +75,7 @@ async function fetchSupabasePlayers() {
   const supabase = getSupabaseBrowserClient();
   const { data, error } = await supabase
     .from("players")
-    .select(
-      "id,row_number,name,eligible_positions,shooting,driving,assisting,man_defense,help_defense,shot_blocking,playmaking,rebounding,transition"
-    )
+    .select(PLAYER_SELECT_COLUMNS)
     .order("row_number", { ascending: true });
 
   if (error) {
@@ -87,15 +85,72 @@ async function fetchSupabasePlayers() {
   return playersFromRows(data ?? []);
 }
 
-async function pushPlayersSnapshot(players: Player[]) {
-  const supabase = getSupabaseBrowserClient();
-  const { error } = await supabase.from("players").upsert(players.map(playerToRow), {
-    onConflict: "id"
-  });
+type PushPlayersSnapshotResult = {
+  players: Player[];
+  tempIdMap: Map<number, number>;
+};
 
-  if (error) {
-    throw error;
+async function pushPlayersSnapshot(
+  players: Player[],
+  previousPlayers: Player[]
+): Promise<PushPlayersSnapshotResult> {
+  const supabase = getSupabaseBrowserClient();
+  const existingPlayers = players.filter((player) => player.id > 0);
+  const draftPlayers = players.filter((player) => player.id <= 0);
+  const deletedPlayerIds = previousPlayers
+    .filter(
+      (player) =>
+        player.id > 0 && !players.some((candidate) => candidate.id === player.id)
+    )
+    .map((player) => player.id);
+
+  if (existingPlayers.length > 0) {
+    const { error } = await supabase.from("players").upsert(existingPlayers.map(playerToRow), {
+      onConflict: "id"
+    });
+
+    if (error) {
+      throw error;
+    }
   }
+
+  const tempIdMap = new Map<number, number>();
+
+  if (draftPlayers.length > 0) {
+    const { data, error } = await supabase
+      .from("players")
+      .insert(draftPlayers.map(playerToInsertRow))
+      .select(PLAYER_SELECT_COLUMNS);
+
+    if (error) {
+      throw error;
+    }
+
+    const insertedPlayers = playersFromRows(data ?? []);
+    const insertedPlayersByRowNumber = new Map(
+      insertedPlayers.map((player) => [player.rowNumber, player] as const)
+    );
+
+    for (const draftPlayer of draftPlayers) {
+      const insertedPlayer = insertedPlayersByRowNumber.get(draftPlayer.rowNumber);
+      if (insertedPlayer) {
+        tempIdMap.set(draftPlayer.id, insertedPlayer.id);
+      }
+    }
+  }
+
+  if (deletedPlayerIds.length > 0) {
+    const { error } = await supabase.from("players").delete().in("id", deletedPlayerIds);
+
+    if (error) {
+      throw error;
+    }
+  }
+
+  return {
+    players: sanitizePlayers(remapPlayersById(players, tempIdMap)),
+    tempIdMap
+  };
 }
 
 export function TournamentBuilderProvider({ children }: { children: ReactNode }) {
@@ -120,6 +175,30 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
     lastSyncedPlayersRef.current = players;
   }, []);
 
+  const applyPlayerIdRemap = useCallback((tempIdMap: Map<number, number>) => {
+    if (tempIdMap.size === 0) {
+      return;
+    }
+
+    pendingPlayerSyncRef.current = pendingPlayerSyncRef.current
+      ? remapPlayersById(pendingPlayerSyncRef.current, tempIdMap)
+      : null;
+
+    setState((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const nextState = {
+        ...current,
+        players: remapPlayersById(current.players, tempIdMap),
+        assignments: remapAssignmentsByPlayerId(current.assignments, tempIdMap)
+      };
+      latestStateRef.current = nextState;
+      return nextState;
+    });
+  }, []);
+
   const flushPlayerSync = useCallback(async () => {
     if (!hasSupabaseBrowserConfig() || syncInFlightRef.current) {
       return;
@@ -137,8 +216,9 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
       pendingPlayerSyncRef.current = null;
 
       try {
-        await pushPlayersSnapshot(nextSnapshot);
-        lastSyncedPlayersRef.current = nextSnapshot;
+        const result = await pushPlayersSnapshot(nextSnapshot, lastSyncedPlayersRef.current);
+        applyPlayerIdRemap(result.tempIdMap);
+        lastSyncedPlayersRef.current = result.players;
         setSyncError(null);
         suppressRealtimeRef.current = false;
       } catch {
@@ -150,7 +230,7 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
     }
 
     syncInFlightRef.current = false;
-  }, []);
+  }, [applyPlayerIdRemap]);
 
   const schedulePlayerSync = useCallback(
     (immediate = false) => {
@@ -436,11 +516,47 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
           assignments: pruneAssignments(nextPlayers, current.assignments)
         };
 
+        latestStateRef.current = nextState;
         queuePlayerSync(nextPlayers);
         return nextState;
       });
     },
     [queuePlayerSync]
+  );
+
+  const addPlayer = useCallback(() => {
+    const currentState = latestStateRef.current;
+    if (!currentState) {
+      return null;
+    }
+
+    const nextPlayer = createPlayerDraft(currentState.players);
+    const nextState = {
+      ...currentState,
+      players: [...currentState.players, nextPlayer]
+    };
+    latestStateRef.current = nextState;
+
+    setState((current) => {
+      if (!current) {
+        return current;
+      }
+
+      return {
+        ...current,
+        players: [...current.players, nextPlayer]
+      };
+    });
+
+    queuePlayerSync(nextState.players);
+    return nextPlayer.id;
+  }, [queuePlayerSync]);
+
+  const deletePlayer = useCallback(
+    (playerId: number) => {
+      applyPlayerUpdate((players) => players.filter((player) => player.id !== playerId));
+    },
+    [applyPlayerUpdate]
   );
 
   const updatePlayerName = useCallback(
@@ -536,10 +652,12 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
   const value = useMemo<BuilderContextValue>(
     () => ({
       loading,
-      players: state?.players ?? makeBlankPlayers(),
+      players: state?.players ?? createDefaultPlayers(),
       assignments: state?.assignments ?? createEmptyAssignments(),
       syncError,
       retrySync,
+      addPlayer,
+      deletePlayer,
       updatePlayerName,
       togglePlayerPosition,
       updatePlayerAttribute,
@@ -548,8 +666,10 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
       getEligibleForSlot
     }),
     [
+      addPlayer,
       assignPlayer,
       clearAssignment,
+      deletePlayer,
       getEligibleForSlot,
       loading,
       retrySync,

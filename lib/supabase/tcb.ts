@@ -24,6 +24,11 @@ type DbPlayerRow = {
   transition: number | null;
 };
 
+export type DbPlayerInsertRow = Omit<DbPlayerRow, "id">;
+
+export const PLAYER_SELECT_COLUMNS =
+  "id,row_number,name,eligible_positions,shooting,driving,assisting,man_defense,help_defense,shot_blocking,playmaking,rebounding,transition";
+
 type DbTeamScenarioRow = {
   id: string;
   title: string;
@@ -97,6 +102,12 @@ export function playerFromRow(row: DbPlayerRow): Player {
 export function playerToRow(player: Player): DbPlayerRow {
   return {
     id: player.id,
+    ...playerToInsertRow(player)
+  };
+}
+
+export function playerToInsertRow(player: Player): DbPlayerInsertRow {
+  return {
     row_number: player.rowNumber,
     name: player.name,
     eligible_positions: player.positions,

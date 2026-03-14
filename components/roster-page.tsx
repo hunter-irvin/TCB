@@ -18,13 +18,15 @@ const ROSTER_MIN_WIDTHS = {
   rowNumber: 28,
   playerName: 150,
   positions: 138,
-  attribute: 50
+  attribute: 50,
+  actions: 44
 } as const;
 const ROSTER_EXTRA_WEIGHTS = {
   rowNumber: 0,
   playerName: 0.18,
   positions: 0.24,
-  attribute: 1
+  attribute: 1,
+  actions: 0
 } as const;
 const ATTRIBUTE_COUNT = PLAYER_ATTRIBUTE_GROUPS.reduce(
   (total, group) => total + group.attributes.length,
@@ -34,12 +36,14 @@ const ROSTER_MIN_TABLE_WIDTH =
   ROSTER_MIN_WIDTHS.rowNumber +
   ROSTER_MIN_WIDTHS.playerName +
   ROSTER_MIN_WIDTHS.positions +
-  ROSTER_MIN_WIDTHS.attribute * ATTRIBUTE_COUNT;
+  ROSTER_MIN_WIDTHS.attribute * ATTRIBUTE_COUNT +
+  ROSTER_MIN_WIDTHS.actions;
 const ROSTER_TOTAL_WEIGHT =
   ROSTER_EXTRA_WEIGHTS.rowNumber +
   ROSTER_EXTRA_WEIGHTS.playerName +
   ROSTER_EXTRA_WEIGHTS.positions +
-  ROSTER_EXTRA_WEIGHTS.attribute * ATTRIBUTE_COUNT;
+  ROSTER_EXTRA_WEIGHTS.attribute * ATTRIBUTE_COUNT +
+  ROSTER_EXTRA_WEIGHTS.actions;
 
 type RosterSortKey = "name" | "positions" | PlayerAttributeKey;
 type RosterSortDirection = "asc" | "desc";
@@ -63,7 +67,9 @@ function getRosterColumnWidths(containerWidth: number) {
     positions:
       ROSTER_MIN_WIDTHS.positions + weightUnit * ROSTER_EXTRA_WEIGHTS.positions,
     attribute:
-      ROSTER_MIN_WIDTHS.attribute + weightUnit * ROSTER_EXTRA_WEIGHTS.attribute
+      ROSTER_MIN_WIDTHS.attribute + weightUnit * ROSTER_EXTRA_WEIGHTS.attribute,
+    actions:
+      ROSTER_MIN_WIDTHS.actions + weightUnit * ROSTER_EXTRA_WEIGHTS.actions
   };
 }
 
@@ -76,7 +82,8 @@ function areWidthsEqual(
     previous.rowNumber === next.rowNumber &&
     previous.playerName === next.playerName &&
     previous.positions === next.positions &&
-    previous.attribute === next.attribute
+    previous.attribute === next.attribute &&
+    previous.actions === next.actions
   );
 }
 
@@ -165,14 +172,31 @@ function getInitialSortDirection(key: RosterSortKey): RosterSortDirection {
 }
 
 function RosterContent() {
-  const { loading, players, retrySync, syncError, togglePlayerPosition, updatePlayerAttribute, updatePlayerName } =
-    useTournamentBuilder();
+  const {
+    addPlayer,
+    deletePlayer,
+    loading,
+    players,
+    retrySync,
+    syncError,
+    togglePlayerPosition,
+    updatePlayerAttribute,
+    updatePlayerName
+  } = useTournamentBuilder();
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [sortState, setSortState] = useState<RosterSortState>(null);
+  const [pendingFocusPlayerId, setPendingFocusPlayerId] = useState<number | null>(null);
   const [columnWidths, setColumnWidths] = useState(() =>
     getRosterColumnWidths(ROSTER_MIN_TABLE_WIDTH)
   );
   const displayedPlayers = useMemo(() => sortPlayers(players, sortState), [players, sortState]);
+
+  const handleAddPlayer = () => {
+    const playerId = addPlayer();
+    if (playerId !== null) {
+      setPendingFocusPlayerId(playerId);
+    }
+  };
 
   const handleSort = (key: RosterSortKey) => {
     setSortState((current) => {
@@ -244,6 +268,7 @@ function RosterContent() {
                   />
                 ))
               )}
+              <col className="roster-col actions" style={{ width: `${columnWidths.actions}px` }} />
             </colgroup>
             <thead>
               <tr>
@@ -257,6 +282,7 @@ function RosterContent() {
                     {group.label}
                   </th>
                 ))}
+                <th className="roster-group-spacer" />
               </tr>
               <tr>
                 <th className="roster-head-cell row-number" aria-label="Row count" />
@@ -282,7 +308,7 @@ function RosterContent() {
                     className={`roster-sort-button${sortState?.key === "positions" ? " active" : ""}`}
                     onClick={() => handleSort("positions")}
                   >
-                    Pos.
+                    Position
                     <span className="roster-sort-indicator" aria-hidden="true">
                       {sortState?.key === "positions"
                         ? sortState.direction === "asc"
@@ -312,25 +338,36 @@ function RosterContent() {
                     </th>
                   ))
                 )}
+                <th className="roster-head-cell actions" aria-label="Player actions" />
               </tr>
             </thead>
             <tbody>
-              {displayedPlayers.map((player, index) => (
+              {displayedPlayers.map((player) => (
                 <RosterRow
-                  key={player.id}
+                  key={player.rowNumber}
                   id={player.id}
-                  displayIndex={index + 1}
+                  rowNumber={player.rowNumber}
                   name={player.name}
                   positions={player.positions}
                   attributes={player.attributes}
+                  shouldAutoFocus={player.id === pendingFocusPlayerId}
                   onNameChange={updatePlayerName}
                   onNameBlur={retrySync}
+                  onDelete={deletePlayer}
                   onPositionToggle={togglePlayerPosition}
                   onAttributeChange={updatePlayerAttribute}
                 />
               ))}
             </tbody>
           </table>
+        </div>
+        <div
+          className="roster-add-row"
+          style={{ marginLeft: `${columnWidths.rowNumber}px`, marginTop: "15px" }}
+        >
+          <button type="button" className="roster-add-button" onClick={handleAddPlayer}>
+            Add player
+          </button>
         </div>
       </section>
     </AppShell>
@@ -339,22 +376,26 @@ function RosterContent() {
 
 function RosterRow({
   id,
-  displayIndex,
+  rowNumber,
   name,
   positions,
   attributes,
+  shouldAutoFocus,
   onNameChange,
   onNameBlur,
+  onDelete,
   onPositionToggle,
   onAttributeChange
 }: {
   id: number;
-  displayIndex: number;
+  rowNumber: number;
   name: string;
   positions: Position[];
   attributes: PlayerAttributes;
+  shouldAutoFocus: boolean;
   onNameChange: (playerId: number, nextName: string) => void;
   onNameBlur: () => void;
+  onDelete: (playerId: number) => void;
   onPositionToggle: (playerId: number, position: Position) => void;
   onAttributeChange: (
     playerId: number,
@@ -362,13 +403,43 @@ function RosterRow({
     rating: PlayerAttributeRating | null
   ) => void;
 }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!menuOpen) {
+      return undefined;
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setMenuOpen(false);
+      }
+    };
+
+    window.addEventListener("mousedown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("mousedown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [menuOpen]);
+
   return (
-    <tr>
-      <td className="roster-rownum">{displayIndex}</td>
+    <tr className="roster-row">
+      <td className="roster-rownum">{rowNumber}</td>
       <td className="roster-name-cell">
         <input
           className="roster-name"
-          aria-label={`Player ${displayIndex} name`}
+          aria-label={`Player ${rowNumber} name`}
+          autoFocus={shouldAutoFocus}
           value={name}
           onChange={(event) => onNameChange(id, event.target.value)}
           onBlur={onNameBlur}
@@ -376,7 +447,7 @@ function RosterRow({
         />
       </td>
       <td className="roster-positions-cell">
-        <div className="multi-select" role="group" aria-label={`Player ${displayIndex} positions`}>
+        <div className="multi-select" role="group" aria-label={`Player ${rowNumber} positions`}>
           {POSITIONS.map((position) => {
             const active = positions.includes(position);
             return (
@@ -398,7 +469,7 @@ function RosterRow({
           <td key={attribute.key} className="roster-attribute-cell">
             <select
               className="roster-attribute-select"
-              aria-label={`Player ${displayIndex} ${attribute.label}`}
+              aria-label={`Player ${rowNumber} ${attribute.label}`}
               value={attributes[attribute.key] ?? ""}
               onChange={(event) =>
                 onAttributeChange(
@@ -418,6 +489,38 @@ function RosterRow({
           </td>
         ))
       )}
+      <td className="roster-actions-cell">
+        <div ref={menuRef} className="roster-action-menu">
+          <button
+            type="button"
+            className="roster-menu-button"
+            onClick={() => setMenuOpen((current) => !current)}
+            aria-label={`More actions for player ${name.trim() || rowNumber}`}
+            aria-expanded={menuOpen}
+          >
+            <span className="roster-menu-dots" aria-hidden="true">
+              <span />
+              <span />
+              <span />
+            </span>
+          </button>
+          {menuOpen ? (
+            <div className="roster-action-popover">
+              <button
+                type="button"
+                className="roster-delete-button"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onDelete(id);
+                }}
+                aria-label={`Delete player ${name.trim() || rowNumber}`}
+              >
+                Delete
+              </button>
+            </div>
+          ) : null}
+        </div>
+      </td>
     </tr>
   );
 }

@@ -181,7 +181,7 @@ function countFilledAssignments(assignments: Assignments) {
 function randomizeRemainingAssignments(
   assignments: Assignments,
   availablePlayers: Player[],
-  retries: number
+  maxAttempts: number
 ) {
   const emptySlots = TEAMS.flatMap((team) =>
     POSITIONS.filter((position) => assignments[team.id][position] === null).map((position) => ({
@@ -197,7 +197,7 @@ function randomizeRemainingAssignments(
   let bestAssignments = assignments;
   let bestScore = countFilledAssignments(assignments);
 
-  for (let attempt = 0; attempt <= retries; attempt += 1) {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const nextAssignments = cloneAssignments(assignments);
     const remainingPlayers = shuffleArray(availablePlayers);
     const slotOrder = shuffleArray(emptySlots).sort((left, right) => {
@@ -284,6 +284,18 @@ function formatPlayerLabel(name: string): string {
   const shortened = `${firstNames} ${lastName.charAt(0)}.`;
 
   return shortened.length <= compact.length ? shortened : compact;
+}
+
+function getPlayerPoolName(player: Player) {
+  return player.name.trim() || `Player ${player.rowNumber}`;
+}
+
+function canPlayerAppearInPool(player: Player) {
+  return Boolean(player.name.trim());
+}
+
+function canPlayerBeAssignedFromPool(player: Player) {
+  return canPlayerAppearInPool(player) && player.positions.length > 0;
 }
 
 function createDragPreview(node: HTMLDivElement): HTMLDivElement {
@@ -1139,7 +1151,7 @@ function TeamsContent() {
     for (const scenario of scenarios) {
       const scenarioPlayers = players
         .filter((player) => {
-          if (!player.name.trim()) {
+          if (!canPlayerAppearInPool(player)) {
             return false;
           }
 
@@ -1161,6 +1173,18 @@ function TeamsContent() {
 
     return nextAvailable;
   }, [dragState, players, scenarios]);
+
+  useEffect(() => {
+    setSelectedAvailablePlayer((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const scenarioPlayers = availablePlayersByScenario.get(current.scenarioId) ?? [];
+      const selectedPlayer = scenarioPlayers.find((player) => player.id === current.playerId);
+      return selectedPlayer && canPlayerBeAssignedFromPool(selectedPlayer) ? current : null;
+    });
+  }, [availablePlayersByScenario]);
 
   const orderedScenarios = useMemo(() => {
     if (!scenarioReorder) {
@@ -1252,7 +1276,9 @@ function TeamsContent() {
     }
 
     const scenario = scenarioById.get(scenarioId);
-    const availablePlayers = availablePlayersByScenario.get(scenarioId) ?? [];
+    const availablePlayers = (availablePlayersByScenario.get(scenarioId) ?? []).filter(
+      canPlayerBeAssignedFromPool
+    );
     if (!scenario || availablePlayers.length === 0) {
       return;
     }
@@ -1271,7 +1297,7 @@ function TeamsContent() {
 
     window.setTimeout(() => {
       updateScenarioAssignments(scenarioId, (assignments) =>
-        randomizeRemainingAssignments(assignments, availablePlayers, 2)
+        randomizeRemainingAssignments(assignments, availablePlayers, 15)
       );
       setRandomizingScenarioId((current) => (current === scenarioId ? null : current));
     }, 0);
@@ -1618,6 +1644,7 @@ function TeamsContent() {
             displayedAssignmentsByScenario.get(scenario.id) ?? scenario.assignments;
           const scenarioCharts = buildScenarioAttributeCharts(scenario.assignments, playerById);
           const availablePlayers = availablePlayersByScenario.get(scenario.id) ?? [];
+          const hasAssignablePoolPlayers = availablePlayers.some(canPlayerBeAssignedFromPool);
           const currentNearestSlot = nearestSlot?.scenarioId === scenario.id ? nearestSlot : null;
           const currentOpenPickerSlot =
             openPickerSlot?.scenarioId === scenario.id ? openPickerSlot.slot : null;
@@ -1765,7 +1792,7 @@ function TeamsContent() {
                           onClick={() => randomizeScenarioRemainingPlayers(scenario.id)}
                           disabled={
                             isRandomizingScenario ||
-                            availablePlayers.length === 0 ||
+                            !hasAssignablePoolPlayers ||
                             !hasOpenSlots
                           }
                         >
@@ -1773,35 +1800,46 @@ function TeamsContent() {
                         </button>
                       </div>
                     </div>
-                    <div className="available-players">
+                      <div className="available-players">
                       {availablePlayers.map((player) => {
                         const isSelected = selectedAvailablePlayerId === player.id;
+                        const isAssignable = canPlayerBeAssignedFromPool(player);
+                        const poolName = getPlayerPoolName(player);
                         return (
                           <div
                             key={player.id}
-                            className={`player-chip available-player-chip${isSelected ? " selected" : ""}`}
-                            title={player.name}
-                            onMouseDown={(event) =>
-                              bindChipPointerDown(
-                                event,
-                                player.id,
-                                event.currentTarget,
-                                (playerId, chipNode) => beginDrag(scenario.id, playerId, chipNode, null),
-                                () => {
-                                  setOpenPickerSlot(null);
-                                  setSelectedAvailablePlayer((current) =>
-                                    current?.scenarioId === scenario.id && current.playerId === player.id
-                                      ? null
-                                      : {
-                                          scenarioId: scenario.id,
-                                          playerId: player.id
-                                        }
-                                  );
-                                }
-                              )
+                            className={`player-chip available-player-chip${isSelected ? " selected" : ""}${isAssignable ? "" : " incomplete"}`}
+                            title={
+                              isAssignable
+                                ? poolName
+                                : `${poolName} needs at least one eligible position before assignment`
                             }
+                            onMouseDown={
+                              isAssignable
+                                ? (event) =>
+                                    bindChipPointerDown(
+                                      event,
+                                      player.id,
+                                      event.currentTarget,
+                                      (playerId, chipNode) =>
+                                        beginDrag(scenario.id, playerId, chipNode, null),
+                                      () => {
+                                        setOpenPickerSlot(null);
+                                        setSelectedAvailablePlayer((current) =>
+                                          current?.scenarioId === scenario.id && current.playerId === player.id
+                                            ? null
+                                            : {
+                                                scenarioId: scenario.id,
+                                                playerId: player.id
+                                              }
+                                        );
+                                      }
+                                    )
+                                : undefined
+                            }
+                            aria-disabled={!isAssignable}
                           >
-                            {formatPlayerLabel(player.name)}
+                            {formatPlayerLabel(poolName)}
                           </div>
                         );
                       })}
