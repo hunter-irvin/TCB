@@ -1,6 +1,8 @@
 import {
+  DEFAULT_PLAYER_CHEMISTRY_BY_ROW,
   DEFAULT_PLAYER_SEEDS,
   DEFAULT_PLAYER_ATTRIBUTES_BY_ROW,
+  MAX_PLAYER_CHEMISTRY_LINKS,
   PLAYER_ATTRIBUTE_GROUPS,
   POSITIONS,
   SEED_VERSION,
@@ -12,6 +14,8 @@ import type {
   Player,
   PlayerAttributeKey,
   PlayerAttributes,
+  PlayerChemistry,
+  PlayerChemistryKind,
   Position,
   SlotDescriptor
 } from "@/lib/types";
@@ -24,6 +28,13 @@ export function createEmptyPlayerAttributes(): PlayerAttributes {
     },
     {} as PlayerAttributes
   );
+}
+
+export function createEmptyPlayerChemistry(): PlayerChemistry {
+  return {
+    bonus: [],
+    tax: []
+  };
 }
 
 export function sanitizePlayerAttributes(
@@ -44,8 +55,70 @@ function hasAnyPlayerAttribute(attributes: PlayerAttributes): boolean {
   return Object.values(attributes).some((value) => value !== null);
 }
 
+function sanitizePlayerChemistryIds(
+  values: number[] | null | undefined,
+  validPlayerIds: ReadonlySet<number>,
+  excludedIds: ReadonlySet<number>
+) {
+  const next: number[] = [];
+  const seen = new Set<number>();
+
+  for (const value of values ?? []) {
+    const chemistryPlayerId = Number(value);
+    if (
+      !Number.isInteger(chemistryPlayerId) ||
+      seen.has(chemistryPlayerId) ||
+      excludedIds.has(chemistryPlayerId) ||
+      !validPlayerIds.has(chemistryPlayerId)
+    ) {
+      continue;
+    }
+
+    seen.add(chemistryPlayerId);
+    next.push(chemistryPlayerId);
+
+    if (next.length >= MAX_PLAYER_CHEMISTRY_LINKS) {
+      break;
+    }
+  }
+
+  return next;
+}
+
+export function sanitizePlayerChemistry(
+  chemistry: Partial<Record<PlayerChemistryKind, number[]>> | undefined,
+  validPlayerIds: ReadonlySet<number>,
+  playerId: number
+): PlayerChemistry {
+  const excludedIds = new Set<number>([playerId]);
+  const bonus = sanitizePlayerChemistryIds(chemistry?.bonus, validPlayerIds, excludedIds);
+
+  for (const chemistryPlayerId of bonus) {
+    excludedIds.add(chemistryPlayerId);
+  }
+
+  const tax = sanitizePlayerChemistryIds(chemistry?.tax, validPlayerIds, excludedIds);
+
+  return {
+    bonus,
+    tax
+  };
+}
+
 export function getDefaultPlayerAttributes(rowNumber: number): PlayerAttributes {
   return sanitizePlayerAttributes(DEFAULT_PLAYER_ATTRIBUTES_BY_ROW[rowNumber]);
+}
+
+export function getDefaultPlayerChemistry(rowNumber: number): PlayerChemistry {
+  const chemistry = DEFAULT_PLAYER_CHEMISTRY_BY_ROW[rowNumber];
+  if (!chemistry) {
+    return createEmptyPlayerChemistry();
+  }
+
+  return {
+    bonus: [...chemistry.bonus],
+    tax: [...chemistry.tax]
+  };
 }
 
 export function createEmptyAssignments(): Assignments {
@@ -74,26 +147,36 @@ export function createDefaultPlayers(): Player[] {
     rowNumber: seed.rowNumber,
     name: seed.name,
     positions: [...seed.positions],
-    attributes: getDefaultPlayerAttributes(seed.rowNumber)
+    attributes: getDefaultPlayerAttributes(seed.rowNumber),
+    chemistry: getDefaultPlayerChemistry(seed.rowNumber)
   }));
 }
 
 export function sanitizePlayers(players: Player[]): Player[] {
-  return players
+  const normalizedPlayers = players.map((player, index) => {
+    const rowNumber = Number(player.rowNumber) || index + 1;
+    return {
+      ...player,
+      id: player.id ?? index + 1,
+      rowNumber,
+      name: player.name ?? "",
+      positions: [...new Set(player.positions)].sort((a, b) => a - b) as Position[],
+      attributes: (() => {
+        const nextAttributes = sanitizePlayerAttributes(player.attributes);
+        return hasAnyPlayerAttribute(nextAttributes)
+          ? nextAttributes
+          : getDefaultPlayerAttributes(rowNumber);
+      })()
+    };
+  });
+  const validPlayerIds = new Set(normalizedPlayers.map((player) => player.id));
+
+  return normalizedPlayers
     .map((player, index) => {
       const rowNumber = Number(player.rowNumber) || index + 1;
       return {
         ...player,
-        id: player.id ?? index + 1,
-        rowNumber,
-        name: player.name ?? "",
-        positions: [...new Set(player.positions)].sort((a, b) => a - b) as Position[],
-        attributes: (() => {
-          const nextAttributes = sanitizePlayerAttributes(player.attributes);
-          return hasAnyPlayerAttribute(nextAttributes)
-            ? nextAttributes
-            : getDefaultPlayerAttributes(rowNumber);
-        })()
+        chemistry: sanitizePlayerChemistry(player.chemistry, validPlayerIds, player.id)
       };
     })
     .sort((left, right) => left.rowNumber - right.rowNumber);
@@ -115,7 +198,8 @@ export function createPlayerDraft(players: Player[]): Player {
     rowNumber,
     name: "",
     positions: [],
-    attributes: createEmptyPlayerAttributes()
+    attributes: createEmptyPlayerAttributes(),
+    chemistry: createEmptyPlayerChemistry()
   };
 }
 
@@ -128,10 +212,30 @@ export function remapPlayersById(players: Player[], idMap: ReadonlyMap<number, n
     idMap.has(player.id)
       ? {
           ...player,
-          id: idMap.get(player.id) ?? player.id
+          id: idMap.get(player.id) ?? player.id,
+          chemistry: {
+            bonus: player.chemistry.bonus.map(
+              (chemistryPlayerId) => idMap.get(chemistryPlayerId) ?? chemistryPlayerId
+            ),
+            tax: player.chemistry.tax.map(
+              (chemistryPlayerId) => idMap.get(chemistryPlayerId) ?? chemistryPlayerId
+            )
+          }
         }
       : player
   );
+}
+
+export function removePlayerFromChemistry(players: Player[], playerId: number): Player[] {
+  return players
+    .filter((player) => player.id !== playerId)
+    .map((player) => ({
+      ...player,
+      chemistry: {
+        bonus: player.chemistry.bonus.filter((chemistryPlayerId) => chemistryPlayerId !== playerId),
+        tax: player.chemistry.tax.filter((chemistryPlayerId) => chemistryPlayerId !== playerId)
+      }
+    }));
 }
 
 export function remapAssignmentsByPlayerId(

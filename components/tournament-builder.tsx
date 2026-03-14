@@ -19,14 +19,17 @@ import {
   createInitialState,
   getEligiblePlayers,
   pruneAssignments,
+  removePlayerFromChemistry,
   remapAssignmentsByPlayerId,
   remapPlayersById,
   sanitizePlayers
 } from "@/lib/state";
 import { getSupabaseBrowserClient, hasSupabaseBrowserConfig } from "@/lib/supabase/browser";
 import {
+  PLAYER_CHEMISTRY_SELECT_COLUMNS,
   PLAYER_SELECT_COLUMNS,
   arePlayersEqual,
+  playerChemistryRowsFromPlayers,
   playerToInsertRow,
   playerToRow,
   playersFromRows
@@ -37,6 +40,7 @@ import type {
   Player,
   PlayerAttributeKey,
   PlayerAttributeRating,
+  PlayerChemistryKind,
   Position,
   SlotDescriptor
 } from "@/lib/types";
@@ -58,6 +62,11 @@ type BuilderContextValue = {
     attribute: PlayerAttributeKey,
     rating: PlayerAttributeRating | null
   ) => void;
+  updatePlayerChemistry: (
+    playerId: number,
+    kind: PlayerChemistryKind,
+    chemistryPlayerIds: number[]
+  ) => void;
   assignPlayer: (playerId: number, slot: SlotDescriptor) => void;
   clearAssignment: (slot: SlotDescriptor) => void;
   getEligibleForSlot: (slot: SlotDescriptor, currentPlayerId: number | null) => Player[];
@@ -73,16 +82,21 @@ function canAssignPlayerToSlot(players: Player[], playerId: number, slot: SlotDe
 
 async function fetchSupabasePlayers() {
   const supabase = getSupabaseBrowserClient();
-  const { data, error } = await supabase
-    .from("players")
-    .select(PLAYER_SELECT_COLUMNS)
-    .order("row_number", { ascending: true });
+  const [{ data: playerRows, error: playerError }, { data: chemistryRows, error: chemistryError }] =
+    await Promise.all([
+      supabase.from("players").select(PLAYER_SELECT_COLUMNS).order("row_number", { ascending: true }),
+      supabase.from("player_chemistry").select(PLAYER_CHEMISTRY_SELECT_COLUMNS)
+    ]);
 
-  if (error) {
-    throw error;
+  if (playerError) {
+    throw playerError;
   }
 
-  return playersFromRows(data ?? []);
+  if (chemistryError) {
+    throw chemistryError;
+  }
+
+  return playersFromRows(playerRows ?? [], chemistryRows ?? []);
 }
 
 type PushPlayersSnapshotResult = {
@@ -147,8 +161,31 @@ async function pushPlayersSnapshot(
     }
   }
 
+  const nextPlayers = sanitizePlayers(remapPlayersById(players, tempIdMap));
+  const chemistrySourcePlayerIds = [...new Set(nextPlayers.map((player) => player.id).filter((id) => id > 0))];
+
+  if (chemistrySourcePlayerIds.length > 0) {
+    const { error } = await supabase
+      .from("player_chemistry")
+      .delete()
+      .in("source_player_id", chemistrySourcePlayerIds);
+
+    if (error) {
+      throw error;
+    }
+  }
+
+  const chemistryRows = playerChemistryRowsFromPlayers(nextPlayers);
+  if (chemistryRows.length > 0) {
+    const { error } = await supabase.from("player_chemistry").insert(chemistryRows);
+
+    if (error) {
+      throw error;
+    }
+  }
+
   return {
-    players: sanitizePlayers(remapPlayersById(players, tempIdMap)),
+    players: nextPlayers,
     tempIdMap
   };
 }
@@ -488,6 +525,13 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
           scheduleRefresh();
         }
       )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "player_chemistry" },
+        () => {
+          scheduleRefresh();
+        }
+      )
       .subscribe();
 
     return () => {
@@ -554,7 +598,7 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
 
   const deletePlayer = useCallback(
     (playerId: number) => {
-      applyPlayerUpdate((players) => players.filter((player) => player.id !== playerId));
+      applyPlayerUpdate((players) => removePlayerFromChemistry(players, playerId));
     },
     [applyPlayerUpdate]
   );
@@ -604,6 +648,27 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
                 }
               }
             : player
+        )
+      );
+    },
+    [applyPlayerUpdate]
+  );
+
+  const updatePlayerChemistry = useCallback(
+    (playerId: number, kind: PlayerChemistryKind, chemistryPlayerIds: number[]) => {
+      applyPlayerUpdate((players) =>
+        sanitizePlayers(
+          players.map((player) =>
+            player.id === playerId
+              ? {
+                  ...player,
+                  chemistry: {
+                    ...player.chemistry,
+                    [kind]: chemistryPlayerIds
+                  }
+                }
+              : player
+          )
         )
       );
     },
@@ -661,6 +726,7 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
       updatePlayerName,
       togglePlayerPosition,
       updatePlayerAttribute,
+      updatePlayerChemistry,
       assignPlayer,
       clearAssignment,
       getEligibleForSlot
@@ -677,6 +743,7 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
       syncError,
       togglePlayerPosition,
       updatePlayerAttribute,
+      updatePlayerChemistry,
       updatePlayerName
     ]
   );

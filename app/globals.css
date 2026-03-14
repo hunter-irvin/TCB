@@ -205,6 +205,10 @@ select {
   background: rgba(178, 196, 226, 0.96);
 }
 
+.roster-group-head.chemistry {
+  background: rgba(224, 202, 217, 0.96);
+}
+
 .roster-head-cell {
   background: rgba(232, 229, 220, 0.92);
 }
@@ -259,6 +263,11 @@ select {
 
 .roster-head-cell.attribute {
   min-width: 50px;
+  font-size: 0.76rem;
+}
+
+.roster-head-cell.chemistry {
+  min-width: 62px;
   font-size: 0.76rem;
 }
 
@@ -365,6 +374,140 @@ select {
   text-align: center;
 }
 
+.roster-chemistry-cell {
+  position: relative;
+}
+
+.roster-chemistry-wrap {
+  position: relative;
+  display: flex;
+  justify-content: center;
+}
+
+.roster-chemistry-button {
+  width: 40px;
+  min-width: 40px;
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0;
+  background: rgba(9, 42, 20, 0.48);
+  color: var(--text);
+  font-weight: 700;
+  cursor: pointer;
+  transition:
+    transform 120ms ease,
+    background 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.roster-chemistry-button:hover,
+.roster-chemistry-button.active {
+  background: rgba(248, 245, 234, 0.12);
+  border-color: rgba(248, 245, 234, 0.26);
+}
+
+.roster-chemistry-button:hover {
+  transform: translateY(-1px);
+}
+
+.roster-chemistry-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 50%;
+  z-index: 8;
+  display: grid;
+  gap: 12px;
+  width: 240px;
+  padding: 14px;
+  border: 1px solid rgba(248, 245, 234, 0.16);
+  border-radius: 18px;
+  background: rgba(12, 37, 22, 0.98);
+  box-shadow: 0 18px 32px rgba(0, 0, 0, 0.28);
+  transform: translateX(-50%);
+}
+
+.roster-chemistry-section {
+  display: grid;
+  gap: 8px;
+}
+
+.roster-chemistry-heading {
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: rgba(248, 245, 234, 0.72);
+}
+
+.roster-chemistry-chip-list,
+.roster-chemistry-option-list {
+  display: grid;
+  gap: 6px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.roster-chemistry-chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(248, 245, 234, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.roster-chemistry-chip span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.roster-chemistry-chip-remove {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #ffd3c7;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.roster-chemistry-option {
+  border: 1px solid rgba(248, 245, 234, 0.12);
+  border-radius: 12px;
+  padding: 9px 10px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    transform 120ms ease,
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+.roster-chemistry-option:hover {
+  transform: translateY(-1px);
+  background: rgba(248, 245, 234, 0.12);
+  border-color: rgba(248, 245, 234, 0.26);
+}
+
+.roster-chemistry-empty,
+.roster-chemistry-limit {
+  color: rgba(248, 245, 234, 0.72);
+  font-size: 0.88rem;
+}
+
+.roster-chemistry-limit {
+  color: #ffd7aa;
+  font-weight: 700;
+}
+
 .roster-actions-cell {
   padding: 0 5px;
   background: transparent;
@@ -465,6 +608,9 @@ select {
     0 14px 24px rgba(246, 212, 109, 0.32);
 }
 
+.roster-chemistry-button:focus-visible,
+.roster-chemistry-chip-remove:focus-visible,
+.roster-chemistry-option:focus-visible,
 .roster-menu-button:focus-visible,
 .roster-delete-button:focus-visible {
   outline: 2px solid rgba(255, 255, 255, 0.72);
@@ -976,13 +1122,13 @@ select {
 
 .scenario-analytics {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
   padding-top: 2px;
 }
 
 .scenario-chart-card {
-  padding: 14px 14px 16px;
+  padding: 12px 10px 14px;
   border-radius: 18px;
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -992,8 +1138,8 @@ select {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 14px;
+  gap: 8px;
+  margin-bottom: 12px;
 }
 
 .scenario-chart-title {
@@ -1012,13 +1158,13 @@ select {
 .scenario-chart-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
+  gap: 8px;
   align-items: end;
 }
 
 .scenario-chart-column {
   display: grid;
-  gap: 8px;
+  gap: 6px;
   justify-items: center;
   overflow: visible;
 }
@@ -1035,7 +1181,7 @@ select {
   flex-direction: column-reverse;
   justify-content: flex-start;
   width: 100%;
-  max-width: 58px;
+  max-width: 50px;
   height: 176px;
   border-radius: 14px;
   overflow: visible;
@@ -1043,6 +1189,51 @@ select {
   border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.08);
   isolation: isolate;
+}
+
+.scenario-chart-total.chemistry {
+  min-width: 2ch;
+  text-align: center;
+}
+
+.scenario-chemistry-bar {
+  position: relative;
+  width: 100%;
+  max-width: 50px;
+  height: 176px;
+  border-radius: 14px;
+  background: rgba(7, 30, 15, 0.62);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.scenario-chemistry-baseline {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  border-top: 1px solid rgba(248, 245, 234, 0.28);
+}
+
+.scenario-chemistry-fill {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px rgba(12, 21, 14, 0.12);
+}
+
+.scenario-chemistry-fill.positive {
+  bottom: 50%;
+  border-bottom-left-radius: 4px;
+  border-bottom-right-radius: 4px;
+}
+
+.scenario-chemistry-fill.negative {
+  top: 50%;
+  border-top-left-radius: 4px;
+  border-top-right-radius: 4px;
 }
 
 .scenario-chart-segment {

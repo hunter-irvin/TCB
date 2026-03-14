@@ -1,8 +1,9 @@
-import { createEmptyAssignments, sanitizePlayers } from "@/lib/state";
+import { createEmptyAssignments, createEmptyPlayerChemistry, sanitizePlayers } from "@/lib/state";
 import type {
   Assignments,
   PersistedScenarioState,
   Player,
+  PlayerChemistryKind,
   Position,
   Scenario,
   SlotDescriptor
@@ -24,10 +25,17 @@ type DbPlayerRow = {
   transition: number | null;
 };
 
+export type DbPlayerChemistryRow = {
+  source_player_id: number;
+  target_player_id: number;
+  kind: PlayerChemistryKind;
+};
+
 export type DbPlayerInsertRow = Omit<DbPlayerRow, "id">;
 
 export const PLAYER_SELECT_COLUMNS =
   "id,row_number,name,eligible_positions,shooting,driving,assisting,man_defense,help_defense,shot_blocking,playmaking,rebounding,transition";
+export const PLAYER_CHEMISTRY_SELECT_COLUMNS = "source_player_id,target_player_id,kind";
 
 type DbTeamScenarioRow = {
   id: string;
@@ -79,7 +87,10 @@ function normalizePositions(values: number[] | null | undefined): Position[] {
   ) as Position[];
 }
 
-export function playerFromRow(row: DbPlayerRow): Player {
+export function playerFromRow(
+  row: DbPlayerRow,
+  chemistry: Player["chemistry"] = createEmptyPlayerChemistry()
+): Player {
   return {
     id: row.id,
     rowNumber: row.row_number,
@@ -95,7 +106,8 @@ export function playerFromRow(row: DbPlayerRow): Player {
       playmaking: row.playmaking as Player["attributes"]["playmaking"],
       rebounding: row.rebounding as Player["attributes"]["rebounding"],
       transition: row.transition as Player["attributes"]["transition"]
-    }
+    },
+    chemistry
   };
 }
 
@@ -123,12 +135,46 @@ export function playerToInsertRow(player: Player): DbPlayerInsertRow {
   };
 }
 
-export function playersFromRows(rows: DbPlayerRow[]): Player[] {
+export function playerChemistryRowsFromPlayers(players: Player[]): DbPlayerChemistryRow[] {
+  return players
+    .filter((player) => player.id > 0)
+    .flatMap((player) =>
+      (Object.entries(player.chemistry) as Array<[PlayerChemistryKind, number[]]>).flatMap(
+        ([kind, chemistryPlayerIds]) =>
+          chemistryPlayerIds
+            .filter((targetPlayerId) => targetPlayerId > 0)
+            .map((targetPlayerId) => ({
+              source_player_id: player.id,
+              target_player_id: targetPlayerId,
+              kind
+            }))
+      )
+    );
+}
+
+function buildPlayerChemistryBySourceId(rows: DbPlayerChemistryRow[]) {
+  const chemistryBySourceId = new Map<number, Player["chemistry"]>();
+
+  for (const row of rows) {
+    const nextChemistry = chemistryBySourceId.get(row.source_player_id) ?? createEmptyPlayerChemistry();
+    nextChemistry[row.kind] = [...nextChemistry[row.kind], row.target_player_id];
+    chemistryBySourceId.set(row.source_player_id, nextChemistry);
+  }
+
+  return chemistryBySourceId;
+}
+
+export function playersFromRows(
+  rows: DbPlayerRow[],
+  chemistryRows: DbPlayerChemistryRow[] = []
+): Player[] {
+  const chemistryBySourceId = buildPlayerChemistryBySourceId(chemistryRows);
+
   return sanitizePlayers(
     rows
       .slice()
       .sort((left, right) => left.row_number - right.row_number)
-      .map(playerFromRow)
+      .map((row) => playerFromRow(row, chemistryBySourceId.get(row.id)))
   );
 }
 
@@ -199,7 +245,8 @@ export function isSamePlayer(left: Player, right: Player) {
     left.rowNumber === right.rowNumber &&
     left.name === right.name &&
     JSON.stringify(left.positions) === JSON.stringify(right.positions) &&
-    JSON.stringify(left.attributes) === JSON.stringify(right.attributes)
+    JSON.stringify(left.attributes) === JSON.stringify(right.attributes) &&
+    JSON.stringify(left.chemistry) === JSON.stringify(right.chemistry)
   );
 }
 

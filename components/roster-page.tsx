@@ -4,21 +4,36 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import { AppShell } from "@/components/app-shell";
 import { TournamentBuilderProvider, useTournamentBuilder } from "@/components/tournament-builder";
-import { PLAYER_ATTRIBUTE_GROUPS, POSITIONS } from "@/lib/constants";
+import {
+  MAX_PLAYER_CHEMISTRY_LINKS,
+  PLAYER_ATTRIBUTE_GROUPS,
+  POSITIONS
+} from "@/lib/constants";
 import type {
   Player,
   PlayerAttributeKey,
   PlayerAttributeRating,
   PlayerAttributes,
+  PlayerChemistry,
+  PlayerChemistryKind,
   Position
 } from "@/lib/types";
 
 const ATTRIBUTE_RATINGS: PlayerAttributeRating[] = [1, 2, 3, 4, 5];
+const CHEMISTRY_COLUMNS: Array<{
+  key: PlayerChemistryKind;
+  label: string;
+  sortKey: "chemistryBonus" | "chemistryTax";
+}> = [
+  { key: "bonus", label: "Bonus", sortKey: "chemistryBonus" },
+  { key: "tax", label: "Tax", sortKey: "chemistryTax" }
+];
 const ROSTER_MIN_WIDTHS = {
   rowNumber: 28,
   playerName: 150,
   positions: 138,
   attribute: 50,
+  chemistry: 62,
   actions: 44
 } as const;
 const ROSTER_EXTRA_WEIGHTS = {
@@ -26,26 +41,31 @@ const ROSTER_EXTRA_WEIGHTS = {
   playerName: 0.18,
   positions: 0.24,
   attribute: 1,
+  chemistry: 0.72,
   actions: 0
 } as const;
 const ATTRIBUTE_COUNT = PLAYER_ATTRIBUTE_GROUPS.reduce(
   (total, group) => total + group.attributes.length,
   0
 );
+const CHEMISTRY_COUNT = CHEMISTRY_COLUMNS.length;
 const ROSTER_MIN_TABLE_WIDTH =
   ROSTER_MIN_WIDTHS.rowNumber +
   ROSTER_MIN_WIDTHS.playerName +
   ROSTER_MIN_WIDTHS.positions +
   ROSTER_MIN_WIDTHS.attribute * ATTRIBUTE_COUNT +
+  ROSTER_MIN_WIDTHS.chemistry * CHEMISTRY_COUNT +
   ROSTER_MIN_WIDTHS.actions;
 const ROSTER_TOTAL_WEIGHT =
   ROSTER_EXTRA_WEIGHTS.rowNumber +
   ROSTER_EXTRA_WEIGHTS.playerName +
   ROSTER_EXTRA_WEIGHTS.positions +
   ROSTER_EXTRA_WEIGHTS.attribute * ATTRIBUTE_COUNT +
+  ROSTER_EXTRA_WEIGHTS.chemistry * CHEMISTRY_COUNT +
   ROSTER_EXTRA_WEIGHTS.actions;
 
-type RosterSortKey = "name" | "positions" | PlayerAttributeKey;
+type RosterChemistrySortKey = (typeof CHEMISTRY_COLUMNS)[number]["sortKey"];
+type RosterSortKey = "name" | "positions" | PlayerAttributeKey | RosterChemistrySortKey;
 type RosterSortDirection = "asc" | "desc";
 
 type RosterSortState = {
@@ -68,6 +88,8 @@ function getRosterColumnWidths(containerWidth: number) {
       ROSTER_MIN_WIDTHS.positions + weightUnit * ROSTER_EXTRA_WEIGHTS.positions,
     attribute:
       ROSTER_MIN_WIDTHS.attribute + weightUnit * ROSTER_EXTRA_WEIGHTS.attribute,
+    chemistry:
+      ROSTER_MIN_WIDTHS.chemistry + weightUnit * ROSTER_EXTRA_WEIGHTS.chemistry,
     actions:
       ROSTER_MIN_WIDTHS.actions + weightUnit * ROSTER_EXTRA_WEIGHTS.actions
   };
@@ -83,6 +105,7 @@ function areWidthsEqual(
     previous.playerName === next.playerName &&
     previous.positions === next.positions &&
     previous.attribute === next.attribute &&
+    previous.chemistry === next.chemistry &&
     previous.actions === next.actions
   );
 }
@@ -145,6 +168,12 @@ function sortPlayers(players: Player[], sortState: RosterSortState) {
         getLowestPosition(right.positions),
         sortState.direction
       );
+    } else if (sortState.key === "chemistryBonus" || sortState.key === "chemistryTax") {
+      primary = compareNullableNumbers(
+        left.chemistry[sortState.key === "chemistryBonus" ? "bonus" : "tax"].length,
+        right.chemistry[sortState.key === "chemistryBonus" ? "bonus" : "tax"].length,
+        sortState.direction
+      );
     } else {
       primary = compareNullableNumbers(
         left.attributes[sortState.key],
@@ -181,6 +210,7 @@ function RosterContent() {
     syncError,
     togglePlayerPosition,
     updatePlayerAttribute,
+    updatePlayerChemistry,
     updatePlayerName
   } = useTournamentBuilder();
   const wrapRef = useRef<HTMLDivElement | null>(null);
@@ -268,6 +298,13 @@ function RosterContent() {
                   />
                 ))
               )}
+              {CHEMISTRY_COLUMNS.map((column) => (
+                <col
+                  key={column.key}
+                  className="roster-col chemistry"
+                  style={{ width: `${columnWidths.chemistry}px` }}
+                />
+              ))}
               <col className="roster-col actions" style={{ width: `${columnWidths.actions}px` }} />
             </colgroup>
             <thead>
@@ -282,6 +319,9 @@ function RosterContent() {
                     {group.label}
                   </th>
                 ))}
+                <th className="roster-group-head chemistry" colSpan={CHEMISTRY_COLUMNS.length}>
+                  Chemistry
+                </th>
                 <th className="roster-group-spacer" />
               </tr>
               <tr>
@@ -338,6 +378,24 @@ function RosterContent() {
                     </th>
                   ))
                 )}
+                {CHEMISTRY_COLUMNS.map((column) => (
+                  <th key={column.key} className="roster-head-cell chemistry">
+                    <button
+                      type="button"
+                      className={`roster-sort-button${sortState?.key === column.sortKey ? " active" : ""}`}
+                      onClick={() => handleSort(column.sortKey)}
+                    >
+                      {column.label}
+                      <span className="roster-sort-indicator" aria-hidden="true">
+                        {sortState?.key === column.sortKey
+                          ? sortState.direction === "asc"
+                            ? "↑"
+                            : "↓"
+                          : "↕"}
+                      </span>
+                    </button>
+                  </th>
+                ))}
                 <th className="roster-head-cell actions" aria-label="Player actions" />
               </tr>
             </thead>
@@ -350,12 +408,15 @@ function RosterContent() {
                   name={player.name}
                   positions={player.positions}
                   attributes={player.attributes}
+                  chemistry={player.chemistry}
+                  players={players}
                   shouldAutoFocus={player.id === pendingFocusPlayerId}
                   onNameChange={updatePlayerName}
                   onNameBlur={retrySync}
                   onDelete={deletePlayer}
                   onPositionToggle={togglePlayerPosition}
                   onAttributeChange={updatePlayerAttribute}
+                  onChemistryChange={updatePlayerChemistry}
                 />
               ))}
             </tbody>
@@ -380,18 +441,23 @@ function RosterRow({
   name,
   positions,
   attributes,
+  chemistry,
+  players,
   shouldAutoFocus,
   onNameChange,
   onNameBlur,
   onDelete,
   onPositionToggle,
-  onAttributeChange
+  onAttributeChange,
+  onChemistryChange
 }: {
   id: number;
   rowNumber: number;
   name: string;
   positions: Position[];
   attributes: PlayerAttributes;
+  chemistry: PlayerChemistry;
+  players: Player[];
   shouldAutoFocus: boolean;
   onNameChange: (playerId: number, nextName: string) => void;
   onNameBlur: () => void;
@@ -402,24 +468,49 @@ function RosterRow({
     attribute: PlayerAttributeKey,
     rating: PlayerAttributeRating | null
   ) => void;
+  onChemistryChange: (
+    playerId: number,
+    kind: PlayerChemistryKind,
+    chemistryPlayerIds: number[]
+  ) => void;
 }) {
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement | null>(null);
+  const [openPanel, setOpenPanel] = useState<"menu" | PlayerChemistryKind | null>(null);
+  const rowRef = useRef<HTMLTableRowElement | null>(null);
+  const playerLabelById = useMemo(
+    () =>
+      new Map(
+        players.map((player) => [
+          player.id,
+          player.name.trim() || `Player ${player.rowNumber}`
+        ] as const)
+      ),
+    [players]
+  );
+  const comparePlayerLabels = useMemo(
+    () => (leftId: number, rightId: number) =>
+      (playerLabelById.get(leftId) ?? `Player ${leftId}`).localeCompare(
+        playerLabelById.get(rightId) ?? `Player ${rightId}`,
+        undefined,
+        { sensitivity: "base" }
+      ),
+    [playerLabelById]
+  );
+  const menuOpen = openPanel === "menu";
 
   useEffect(() => {
-    if (!menuOpen) {
+    if (!openPanel) {
       return undefined;
     }
 
     const handlePointerDown = (event: MouseEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) {
-        setMenuOpen(false);
+      if (!rowRef.current?.contains(event.target as Node)) {
+        setOpenPanel(null);
       }
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setMenuOpen(false);
+        setOpenPanel(null);
       }
     };
 
@@ -430,10 +521,10 @@ function RosterRow({
       window.removeEventListener("mousedown", handlePointerDown);
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [menuOpen]);
+  }, [openPanel]);
 
   return (
-    <tr className="roster-row">
+    <tr ref={rowRef} className="roster-row">
       <td className="roster-rownum">{rowNumber}</td>
       <td className="roster-name-cell">
         <input
@@ -489,12 +580,108 @@ function RosterRow({
           </td>
         ))
       )}
+      {CHEMISTRY_COLUMNS.map((column) => {
+        const activeSelection = [...chemistry[column.key]].sort(comparePlayerLabels);
+        const otherSelection = chemistry[column.key === "bonus" ? "tax" : "bonus"];
+        const remainingPlayers =
+          activeSelection.length >= MAX_PLAYER_CHEMISTRY_LINKS
+            ? []
+            : players
+                .filter(
+                  (player) =>
+                    player.id !== id &&
+                    !activeSelection.includes(player.id) &&
+                    !otherSelection.includes(player.id)
+                )
+                .sort((left, right) =>
+                  (playerLabelById.get(left.id) ?? `Player ${left.rowNumber}`).localeCompare(
+                    playerLabelById.get(right.id) ?? `Player ${right.rowNumber}`,
+                    undefined,
+                    { sensitivity: "base" }
+                  )
+                );
+
+        return (
+          <td key={column.key} className="roster-chemistry-cell">
+            <div className="roster-chemistry-wrap">
+              <button
+                type="button"
+                className={`roster-chemistry-button${openPanel === column.key ? " active" : ""}`}
+                onClick={() =>
+                  setOpenPanel((current) => (current === column.key ? null : column.key))
+                }
+                aria-expanded={openPanel === column.key}
+                aria-label={`${column.label} chemistry for player ${name.trim() || rowNumber}`}
+              >
+                {activeSelection.length}
+              </button>
+              {openPanel === column.key ? (
+                <div className="roster-chemistry-popover">
+                  <div className="roster-chemistry-section">
+                    <div className="roster-chemistry-heading">Active Selection</div>
+                    {activeSelection.length > 0 ? (
+                      <div className="roster-chemistry-chip-list">
+                        {activeSelection.map((chemistryPlayerId) => (
+                          <div key={chemistryPlayerId} className="roster-chemistry-chip">
+                            <span>{playerLabelById.get(chemistryPlayerId) ?? `Player ${chemistryPlayerId}`}</span>
+                            <button
+                              type="button"
+                              className="roster-chemistry-chip-remove"
+                              onClick={() =>
+                                onChemistryChange(
+                                  id,
+                                  column.key,
+                                  activeSelection.filter(
+                                    (currentPlayerId) => currentPlayerId !== chemistryPlayerId
+                                  )
+                                )
+                              }
+                              aria-label={`Remove ${playerLabelById.get(chemistryPlayerId) ?? `Player ${chemistryPlayerId}`}`}
+                            >
+                              x
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="roster-chemistry-empty">No players selected</div>
+                    )}
+                  </div>
+                  <div className="roster-chemistry-section">
+                    <div className="roster-chemistry-heading">Remaining Players</div>
+                    {activeSelection.length >= MAX_PLAYER_CHEMISTRY_LINKS ? (
+                      <div className="roster-chemistry-limit">Only 5 players allowed</div>
+                    ) : remainingPlayers.length > 0 ? (
+                      <div className="roster-chemistry-option-list">
+                        {remainingPlayers.map((player) => (
+                          <button
+                            key={player.id}
+                            type="button"
+                            className="roster-chemistry-option"
+                            onClick={() =>
+                              onChemistryChange(id, column.key, [...activeSelection, player.id])
+                            }
+                          >
+                            {playerLabelById.get(player.id) ?? `Player ${player.rowNumber}`}
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="roster-chemistry-empty">No remaining players</div>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </td>
+        );
+      })}
       <td className="roster-actions-cell">
-        <div ref={menuRef} className="roster-action-menu">
+        <div className="roster-action-menu">
           <button
             type="button"
             className="roster-menu-button"
-            onClick={() => setMenuOpen((current) => !current)}
+            onClick={() => setOpenPanel((current) => (current === "menu" ? null : "menu"))}
             aria-label={`More actions for player ${name.trim() || rowNumber}`}
             aria-expanded={menuOpen}
           >
@@ -510,7 +697,7 @@ function RosterRow({
                 type="button"
                 className="roster-delete-button"
                 onClick={() => {
-                  setMenuOpen(false);
+                  setOpenPanel(null);
                   onDelete(id);
                 }}
                 aria-label={`Delete player ${name.trim() || rowNumber}`}

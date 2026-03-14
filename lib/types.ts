@@ -15,12 +15,17 @@ export type PlayerAttributeRating = 1 | 2 | 3 | 4 | 5;
 
 export type PlayerAttributes = Record<PlayerAttributeKey, PlayerAttributeRating | null>;
 
+export type PlayerChemistryKind = "bonus" | "tax";
+
+export type PlayerChemistry = Record<PlayerChemistryKind, number[]>;
+
 export type Player = {
   id: number;
   rowNumber: number;
   name: string;
   positions: Position[];
   attributes: PlayerAttributes;
+  chemistry: PlayerChemistry;
 };
 
 export type Team = {

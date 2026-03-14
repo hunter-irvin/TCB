@@ -4,7 +4,12 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { createPortal } from "react-dom";
 import { AppShell } from "@/components/app-shell";
 import { TournamentBuilderProvider, useTournamentBuilder } from "@/components/tournament-builder";
-import { PLAYER_ATTRIBUTE_GROUPS, POSITIONS, TEAMS } from "@/lib/constants";
+import {
+  PLAYER_ATTRIBUTE_GROUPS,
+  POSITIONS,
+  TEAM_CHEMISTRY_MAX_ABS,
+  TEAMS
+} from "@/lib/constants";
 import { getSupabaseBrowserClient, hasSupabaseBrowserConfig } from "@/lib/supabase/browser";
 import {
   areAssignmentsEqual,
@@ -93,6 +98,11 @@ type ScenarioAttributeChart = {
   stacks: TeamAttributeStack[];
 };
 
+type TeamChemistryTotal = {
+  team: Team;
+  total: number;
+};
+
 const SCENARIO_CHART_MAX_TOTAL = 75;
 
 function createScenario(index: number): Scenario {
@@ -135,6 +145,40 @@ function buildScenarioAttributeCharts(
       label: group.label,
       tone: group.tone,
       stacks
+    };
+  });
+}
+
+function buildScenarioChemistryTotals(
+  assignments: Assignments,
+  playersById: Map<number, Player>
+): TeamChemistryTotal[] {
+  return TEAMS.map((team) => {
+    const teamPlayerIds = new Set(
+      POSITIONS.map((position) => assignments[team.id][position]).filter(
+        (playerId): playerId is number => playerId !== null
+      )
+    );
+
+    const total = [...teamPlayerIds].reduce((sum, playerId) => {
+      const player = playersById.get(playerId);
+      if (!player) {
+        return sum;
+      }
+
+      const bonusCount = player.chemistry.bonus.filter((chemistryPlayerId) =>
+        teamPlayerIds.has(chemistryPlayerId)
+      ).length;
+      const taxCount = player.chemistry.tax.filter((chemistryPlayerId) =>
+        teamPlayerIds.has(chemistryPlayerId)
+      ).length;
+
+      return sum + bonusCount - taxCount;
+    }, 0);
+
+    return {
+      team,
+      total
     };
   });
 }
@@ -1643,6 +1687,10 @@ function TeamsContent() {
           const displayedAssignments =
             displayedAssignmentsByScenario.get(scenario.id) ?? scenario.assignments;
           const scenarioCharts = buildScenarioAttributeCharts(scenario.assignments, playerById);
+          const scenarioChemistryTotals = buildScenarioChemistryTotals(
+            scenario.assignments,
+            playerById
+          );
           const availablePlayers = availablePlayersByScenario.get(scenario.id) ?? [];
           const hasAssignablePoolPlayers = availablePlayers.some(canPlayerBeAssignedFromPool);
           const currentNearestSlot = nearestSlot?.scenarioId === scenario.id ? nearestSlot : null;
@@ -1934,7 +1982,10 @@ function TeamsContent() {
                       />
                     ))}
                   </div>
-                  <ScenarioAttributeCharts charts={scenarioCharts} />
+                  <ScenarioAttributeCharts
+                    charts={scenarioCharts}
+                    chemistryTotals={scenarioChemistryTotals}
+                  />
                 </div>
               </div>
             </section>
@@ -2132,7 +2183,13 @@ function TeamColumn({
   );
 }
 
-function ScenarioAttributeCharts({ charts }: { charts: ScenarioAttributeChart[] }) {
+function ScenarioAttributeCharts({
+  charts,
+  chemistryTotals
+}: {
+  charts: ScenarioAttributeChart[];
+  chemistryTotals: TeamChemistryTotal[];
+}) {
   return (
     <section className="scenario-analytics" aria-label="Team totals by attribute category">
       {charts.map((chart) => (
@@ -2172,6 +2229,42 @@ function ScenarioAttributeCharts({ charts }: { charts: ScenarioAttributeChart[] 
           </div>
         </div>
       ))}
+      <div className="scenario-chart-card">
+        <div className="scenario-chart-header">
+          <h2 className="scenario-chart-title">Chemistry</h2>
+          <span className="scenario-chart-scale">
+            -{TEAM_CHEMISTRY_MAX_ABS} to {TEAM_CHEMISTRY_MAX_ABS}
+          </span>
+        </div>
+        <div className="scenario-chart-grid">
+          {chemistryTotals.map((total) => {
+            const fillHeight = `${(Math.abs(total.total) / TEAM_CHEMISTRY_MAX_ABS) * 50}%`;
+            const positive = total.total >= 0;
+
+            return (
+              <div key={total.team.id} className="scenario-chart-column">
+                <div className="scenario-chart-total chemistry">{total.total}</div>
+                <div className="scenario-chemistry-bar">
+                  <div className="scenario-chemistry-baseline" aria-hidden="true" />
+                  <div
+                    className={`scenario-chemistry-fill ${positive ? "positive" : "negative"}`}
+                    aria-label={`${total.team.name} chemistry: ${total.total}`}
+                    style={{
+                      height: fillHeight,
+                      background: getChartSegmentColor(total.team.color, positive ? 0 : 2)
+                    }}
+                  />
+                </div>
+                <div className="scenario-chart-team">
+                  {getChartTeamLabelLines(total.team.name).map((line) => (
+                    <span key={line}>{line}</span>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
     </section>
   );
 }

@@ -1,9 +1,17 @@
-import type { PlayerAttributeKey, PlayerAttributes, Position, Team } from "@/lib/types";
+import type {
+  PlayerAttributeKey,
+  PlayerAttributes,
+  PlayerChemistry,
+  Position,
+  Team
+} from "@/lib/types";
 
 export const POSITIONS: Position[] = [1, 2, 3, 4, 5];
 export const ROSTER_SIZE = 20;
 export const STORAGE_KEY = "tcb-app-state";
 export const SEED_VERSION = "2026-03-11-v1";
+export const MAX_PLAYER_CHEMISTRY_LINKS = 5;
+export const TEAM_CHEMISTRY_MAX_ABS = 20;
 
 export const PLAYER_ATTRIBUTE_GROUPS: Array<{
   label: string;
@@ -291,6 +299,23 @@ export const DEFAULT_PLAYER_SEEDS: Array<{
   { rowNumber: 19, name: "Sam", positions: [5] },
   { rowNumber: 20, name: "Yonaton", positions: [5] }
 ];
+
+export const DEFAULT_PLAYER_CHEMISTRY_BY_ROW: Partial<Record<number, PlayerChemistry>> = {
+  1: { bonus: [2, 5], tax: [9] },
+  2: { bonus: [1, 6], tax: [10] },
+  3: { bonus: [4], tax: [7, 8] },
+  4: { bonus: [3, 15], tax: [] },
+  5: { bonus: [1, 6, 19], tax: [] },
+  6: { bonus: [2, 5], tax: [17] },
+  7: { bonus: [8], tax: [3] },
+  8: { bonus: [7, 10], tax: [3] },
+  9: { bonus: [], tax: [1, 2] },
+  10: { bonus: [8], tax: [2] },
+  15: { bonus: [4, 19], tax: [18] },
+  17: { bonus: [19], tax: [6] },
+  18: { bonus: [], tax: [15] },
+  19: { bonus: [5, 15, 17], tax: [] }
+};
 
 export const TEAMS: Team[] = [
   { id: "dawgs", name: "Dave's Dawgs", color: "var(--dawgs)" },
