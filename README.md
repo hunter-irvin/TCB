@@ -16,3 +16,4 @@ Tournament team builder app for drafting roster and team configurations.
 
 - `/roster`
 - `/teams`
+- `/matchup-tinder`

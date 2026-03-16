@@ -84,6 +84,11 @@ select {
   max-width: 680px;
 }
 
+.matchup-tinder-header-copy {
+  display: grid;
+  gap: 4px;
+}
+
 .tabs {
   display: inline-flex;
   gap: 12px;
@@ -1330,6 +1335,558 @@ select {
   outline-offset: 3px;
 }
 
+.matchup-tinder-page {
+  display: grid;
+  gap: 16px;
+}
+
+.matchup-tinder-toggle-block {
+  display: grid;
+  gap: 6px;
+}
+
+.matchup-tinder-toggle {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  width: 100%;
+  max-width: 400px;
+  padding: 6px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.24);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 14px 28px rgba(0, 0, 0, 0.14);
+}
+
+.matchup-tinder-toggle-button {
+  border: 0;
+  border-radius: 999px;
+  padding: 14px 18px;
+  background: transparent;
+  color: rgba(248, 245, 234, 0.74);
+  font-size: 1.6rem;
+  font-weight: 800;
+  cursor: pointer;
+  transition: background 140ms ease, color 140ms ease, transform 140ms ease, box-shadow 140ms ease;
+}
+
+.matchup-tinder-toggle-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.matchup-tinder-toggle-button.active {
+  background: rgba(248, 245, 234, 0.96);
+  color: #142114;
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.16);
+}
+
+.matchup-tinder-toggle-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+.matchup-tinder-toggle-caption {
+  min-height: 18px;
+  color: rgba(248, 245, 234, 0.72);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.matchup-tinder-shell {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  max-width: 800px;
+  margin-inline: auto;
+  padding: 16px;
+  border-radius: 28px;
+  background:
+    radial-gradient(circle at top, rgba(255, 246, 217, 0.14), transparent 28%),
+    linear-gradient(180deg, rgba(108, 55, 22, 0.9) 0%, rgba(73, 31, 11, 0.92) 100%);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.matchup-tinder-shell::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 50% 48%, transparent 0 94px, rgba(255, 238, 214, 0.12) 95px 98px, transparent 99px),
+    linear-gradient(90deg, transparent calc(50% - 1px), rgba(255, 238, 214, 0.18) calc(50% - 1px), rgba(255, 238, 214, 0.18) calc(50% + 1px), transparent calc(50% + 1px));
+  pointer-events: none;
+}
+
+.matchup-tinder-shell::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.matchup-tinder-shell.flash::after {
+  background: rgba(255, 255, 255, 0.94);
+  animation: matchup-shell-flash 220ms ease;
+  z-index: 4;
+}
+
+.matchup-tinder-status {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  margin-bottom: 14px;
+  color: rgba(255, 245, 227, 0.86);
+  font-size: 0.96rem;
+  line-height: 1.4;
+  text-align: center;
+}
+
+.matchup-tinder-stage {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 18px;
+  min-height: 560px;
+  animation: matchup-stage-enter 260ms ease;
+}
+
+.matchup-tinder-stage.resolving {
+  pointer-events: none;
+}
+
+.matchup-tinder-top-target {
+  position: relative;
+  justify-self: stretch;
+  width: 100%;
+  min-height: 112px;
+  border: 1px solid rgba(255, 248, 227, 0.22);
+  border-radius: 22px;
+  padding: 18px 16px;
+  background: rgba(255, 248, 227, 0.08);
+  color: #fff6de;
+  text-align: center;
+  cursor: pointer;
+  transition:
+    transform 340ms ease,
+    opacity 260ms ease,
+    background 140ms ease,
+    box-shadow 140ms ease,
+    border-color 140ms ease;
+  will-change: transform, opacity;
+}
+
+.matchup-tinder-top-target span,
+.matchup-tinder-top-target small {
+  display: block;
+}
+
+.matchup-tinder-top-target span {
+  font-weight: 900;
+  font-size: clamp(2.2rem, 1.6rem + 2vw, 3rem);
+  letter-spacing: 0.02em;
+}
+
+.matchup-tinder-top-target small {
+  margin-top: 5px;
+  color: rgba(255, 246, 222, 0.76);
+}
+
+.matchup-tinder-footnote {
+  margin: 0;
+  color: rgba(248, 245, 234, 0.82);
+  font-size: 0.98rem;
+  line-height: 1.5;
+  text-align: center;
+  text-wrap: balance;
+}
+
+.matchup-tinder-top-target:hover:not(:disabled),
+.matchup-tinder-top-target.active {
+  transform: translateY(-6px);
+  background: rgba(255, 248, 227, 0.18);
+  border-color: rgba(255, 248, 227, 0.58);
+  box-shadow: 0 24px 40px rgba(0, 0, 0, 0.2);
+}
+
+.matchup-tinder-top-target.resolved {
+  background: rgba(255, 221, 121, 0.22);
+  box-shadow: 0 0 0 1px rgba(255, 224, 135, 0.28), 0 18px 32px rgba(0, 0, 0, 0.18);
+}
+
+.matchup-tinder-lanes {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 24vw) minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  min-height: 340px;
+}
+
+.matchup-tinder-lane {
+  position: relative;
+  min-height: 270px;
+  border: 1px solid rgba(255, 245, 227, 0.18);
+  border-radius: 28px;
+  padding: 18px 14px;
+  background:
+    linear-gradient(180deg, rgba(255, 245, 227, 0.14), rgba(255, 245, 227, 0.06));
+  color: #fff5df;
+  display: grid;
+  align-content: start;
+  justify-items: center;
+  gap: 12px;
+  text-align: center;
+  cursor: pointer;
+  transition:
+    transform 340ms ease,
+    opacity 260ms ease,
+    border-color 140ms ease,
+    box-shadow 140ms ease,
+    background 140ms ease;
+  will-change: transform, opacity;
+}
+
+.matchup-tinder-lane:hover:not(:disabled),
+.matchup-tinder-lane.active {
+  transform: translateY(-6px);
+  border-color: rgba(255, 245, 227, 0.56);
+  box-shadow: 0 24px 40px rgba(0, 0, 0, 0.22);
+}
+
+.matchup-tinder-lane.resolved {
+  background:
+    linear-gradient(180deg, rgba(255, 245, 227, 0.22), rgba(255, 245, 227, 0.1));
+  box-shadow: 0 24px 40px rgba(0, 0, 0, 0.2);
+}
+
+.matchup-tinder-role-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  border-radius: 999px;
+  padding: 0 10px;
+  background: rgba(255, 245, 227, 0.9);
+  color: #40220d;
+  font-size: 0.72rem;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.matchup-tinder-media-frame {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 245, 227, 0.16);
+  background: #ebe8e7;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.04),
+    0 12px 26px rgba(0, 0, 0, 0.18);
+}
+
+.matchup-tinder-media-frame::after {
+  content: none;
+}
+
+.matchup-tinder-media {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: 100%;
+  object-position: center;
+  pointer-events: none;
+}
+
+.matchup-tinder-player-name {
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  color: #fff8ea;
+  font-size: clamp(1.22rem, 0.94rem + 1.2vw, 1.82rem);
+  line-height: 1.04;
+  font-weight: 900;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.matchup-tinder-player-name.compact {
+  font-size: clamp(1.06rem, 0.9rem + 0.95vw, 1.48rem);
+}
+
+.matchup-tinder-player-name.compressed {
+  font-size: clamp(0.94rem, 0.82rem + 0.74vw, 1.22rem);
+  letter-spacing: -0.02em;
+}
+
+.matchup-tinder-player-name.ultra-compressed {
+  font-size: clamp(0.84rem, 0.76rem + 0.56vw, 1.04rem);
+  letter-spacing: -0.03em;
+}
+
+.matchup-tinder-ball-lane {
+  position: relative;
+  width: 100%;
+  min-height: 220px;
+  display: grid;
+  place-items: center;
+  transition: transform 320ms ease, opacity 220ms ease;
+  will-change: transform, opacity;
+}
+
+.matchup-tinder-ball-shadow {
+  position: absolute;
+  width: 84px;
+  height: 22px;
+  border-radius: 999px;
+  background: rgba(18, 10, 6, 0.38);
+  filter: blur(10px);
+  transform: translateY(60px);
+}
+
+.matchup-tinder-ball {
+  position: relative;
+  width: 82px;
+  height: 82px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  cursor: grab;
+  touch-action: none;
+  transition: transform 180ms ease, box-shadow 180ms ease;
+}
+
+.matchup-tinder-ball:disabled {
+  cursor: default;
+}
+
+.matchup-tinder-ball-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+  filter: drop-shadow(0 20px 30px rgba(22, 9, 2, 0.3));
+}
+
+.matchup-tinder-ball.dragging .matchup-tinder-ball-image {
+  filter: drop-shadow(0 24px 40px rgba(22, 9, 2, 0.36));
+}
+
+.matchup-tinder-stage.resolving .matchup-tinder-ball-lane {
+  opacity: 0;
+  transform: scale(0.82);
+}
+
+.matchup-tinder-stage.choice-offense_wins .matchup-tinder-top-target {
+  opacity: 0;
+  transform: translateY(-150%);
+}
+
+.matchup-tinder-stage.choice-offense_wins .matchup-tinder-lane.offense {
+  z-index: 2;
+  animation: matchup-selected-target-pulse 1.5s ease-in-out;
+  transform: translate(
+      var(--matchup-selected-shift-x, 0px),
+      var(--matchup-selected-shift-y, 0px)
+    )
+    scale(1);
+}
+
+.matchup-tinder-stage.choice-offense_wins .matchup-tinder-lane.defense {
+  opacity: 0;
+  transform: translateX(135%) scale(0.94);
+}
+
+.matchup-tinder-stage.choice-defense_wins .matchup-tinder-top-target {
+  opacity: 0;
+  transform: translateY(-150%);
+}
+
+.matchup-tinder-stage.choice-defense_wins .matchup-tinder-lane.offense {
+  opacity: 0;
+  transform: translateX(-135%) scale(0.94);
+}
+
+.matchup-tinder-stage.choice-defense_wins .matchup-tinder-lane.defense {
+  z-index: 2;
+  animation: matchup-selected-target-pulse 1.5s ease-in-out;
+  transform: translate(
+      var(--matchup-selected-shift-x, 0px),
+      var(--matchup-selected-shift-y, 0px)
+    )
+    scale(1);
+}
+
+.matchup-tinder-stage.choice-good_matchup .matchup-tinder-top-target {
+  z-index: 2;
+  animation: matchup-selected-target-pulse 1.5s ease-in-out;
+  transform: translate(
+      var(--matchup-selected-shift-x, 0px),
+      var(--matchup-selected-shift-y, 0px)
+    )
+    scale(1);
+}
+
+.matchup-tinder-stage.choice-good_matchup .matchup-tinder-lane.offense {
+  opacity: 0;
+  transform: translateX(-135%) scale(0.94);
+}
+
+.matchup-tinder-stage.choice-good_matchup .matchup-tinder-lane.defense {
+  opacity: 0;
+  transform: translateX(135%) scale(0.94);
+}
+
+.matchup-tinder-skip {
+  justify-self: center;
+  width: min(100%, 170px);
+  border: 0;
+  border-radius: 999px;
+  padding: 10px 14px;
+  background: rgba(255, 245, 227, 0.94);
+  color: #3b210e;
+  font-size: 0.92rem;
+  font-weight: 900;
+  cursor: pointer;
+  box-shadow: 0 14px 24px rgba(22, 9, 2, 0.18);
+  transition: transform 140ms ease, box-shadow 140ms ease;
+}
+
+.matchup-tinder-skip:hover:not(:disabled),
+.matchup-tinder-retry:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 18px 28px rgba(22, 9, 2, 0.22);
+}
+
+.matchup-tinder-error-card,
+.matchup-tinder-loading-card {
+  position: relative;
+  z-index: 1;
+  min-height: 420px;
+  border-radius: 24px;
+  padding: 24px;
+  display: grid;
+  place-items: center;
+  gap: 10px;
+  background: rgba(255, 245, 227, 0.08);
+  color: #fff5df;
+  text-align: center;
+}
+
+.matchup-tinder-error-card h2,
+.matchup-tinder-error-card p,
+.matchup-tinder-loading-card p {
+  margin: 0;
+}
+
+.matchup-tinder-retry {
+  border: 0;
+  border-radius: 999px;
+  padding: 12px 18px;
+  background: rgba(255, 245, 227, 0.94);
+  color: #3b210e;
+  font-weight: 900;
+  cursor: pointer;
+  transition: transform 140ms ease, box-shadow 140ms ease;
+}
+
+.matchup-tinder-loading-ball {
+  width: 54px;
+  height: 54px;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at 30% 28%, #ffbd63 0%, #ef8f2f 42%, #bb5d18 100%);
+  animation: matchup-ball-bounce 800ms ease-in-out infinite;
+}
+
+.matchup-tinder-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(15, 8, 5, 0.58);
+  backdrop-filter: blur(10px);
+}
+
+.matchup-tinder-modal {
+  width: min(100%, 420px);
+  padding: 28px 22px 22px;
+  border-radius: 24px;
+  border: 1px solid rgba(255, 245, 227, 0.2);
+  background:
+    linear-gradient(180deg, rgba(255, 248, 227, 0.98), rgba(245, 232, 210, 0.96));
+  color: #2d1608;
+  box-shadow: 0 28px 56px rgba(0, 0, 0, 0.28);
+  text-align: center;
+}
+
+.matchup-tinder-modal h2,
+.matchup-tinder-modal p {
+  margin: 0;
+}
+
+.matchup-tinder-modal h2 {
+  font-size: clamp(1.7rem, 1.28rem + 1.2vw, 2.2rem);
+  line-height: 1.04;
+  font-weight: 900;
+}
+
+.matchup-tinder-modal p {
+  margin-top: 10px;
+  color: rgba(45, 22, 8, 0.72);
+  font-size: 0.98rem;
+  line-height: 1.4;
+}
+
+.matchup-tinder-modal-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.matchup-tinder-modal-button {
+  border: 0;
+  border-radius: 999px;
+  padding: 12px 14px;
+  font-size: 0.96rem;
+  font-weight: 900;
+  cursor: pointer;
+  transition: transform 140ms ease, box-shadow 140ms ease, background 140ms ease;
+}
+
+.matchup-tinder-modal-button:hover {
+  transform: translateY(-1px);
+}
+
+.matchup-tinder-modal-button.primary {
+  background: #2f6a2f;
+  color: #f7f3ea;
+  box-shadow: 0 14px 26px rgba(47, 106, 47, 0.22);
+}
+
+.matchup-tinder-modal-button.secondary {
+  background: rgba(45, 22, 8, 0.1);
+  color: #2d1608;
+  box-shadow: inset 0 0 0 1px rgba(45, 22, 8, 0.12);
+}
+
+.matchup-tinder-shell button:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.82);
+  outline-offset: 3px;
+}
+
 .player-chip-clear {
   position: absolute;
   top: -6px;
@@ -1377,6 +1934,77 @@ select {
   }
 }
 
+@keyframes matchup-stage-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes matchup-selected-target-pulse {
+  0% {
+    transform: translate(
+        var(--matchup-selected-shift-x, 0px),
+        var(--matchup-selected-shift-y, 0px)
+      )
+      scale(1);
+  }
+
+  25% {
+    transform: translate(
+        var(--matchup-selected-shift-x, 0px),
+        var(--matchup-selected-shift-y, 0px)
+      )
+      scale(1.2);
+  }
+
+  75% {
+    transform: translate(
+        var(--matchup-selected-shift-x, 0px),
+        var(--matchup-selected-shift-y, 0px)
+      )
+      scale(0.8);
+  }
+
+  100% {
+    transform: translate(
+        var(--matchup-selected-shift-x, 0px),
+        var(--matchup-selected-shift-y, 0px)
+      )
+      scale(1);
+  }
+}
+
+@keyframes matchup-shell-flash {
+  0% {
+    opacity: 0;
+  }
+
+  20% {
+    opacity: 0.88;
+  }
+
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes matchup-ball-bounce {
+  0%,
+  100% {
+    transform: translateY(0) scale(1);
+  }
+
+  50% {
+    transform: translateY(-8px) scale(1.03);
+  }
+}
+
 @media (max-width: 1100px) {
   .teams-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1391,6 +2019,10 @@ select {
   .page-header {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .matchup-tinder-toggle {
+    max-width: none;
   }
 }
 
@@ -1413,5 +2045,61 @@ select {
 
   .scenario-chart-bar {
     max-width: none;
+  }
+
+  .matchup-tinder-shell {
+    padding: 14px;
+    border-radius: 22px;
+  }
+
+  .matchup-tinder-stage {
+    min-height: 0;
+  }
+
+  .matchup-tinder-lanes {
+    grid-template-columns: minmax(0, 1fr) minmax(92px, 24vw) minmax(0, 1fr);
+    gap: 10px;
+    min-height: 0;
+  }
+
+  .matchup-tinder-lane {
+    min-height: 250px;
+    padding: 16px 10px;
+    border-radius: 22px;
+  }
+
+  .matchup-tinder-media-frame {
+    border-radius: 3px;
+  }
+
+  .matchup-tinder-ball {
+    width: 70px;
+    height: 70px;
+  }
+
+  .matchup-tinder-modal {
+    padding: 24px 18px 18px;
+  }
+
+  .matchup-tinder-modal-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .matchup-tinder-stage.choice-offense_wins .matchup-tinder-lane.offense {
+    animation: matchup-selected-target-pulse 1.5s ease-in-out;
+    transform: translate(
+        var(--matchup-selected-shift-x, 0px),
+        var(--matchup-selected-shift-y, 0px)
+      )
+      scale(1);
+  }
+
+  .matchup-tinder-stage.choice-defense_wins .matchup-tinder-lane.defense {
+    animation: matchup-selected-target-pulse 1.5s ease-in-out;
+    transform: translate(
+        var(--matchup-selected-shift-x, 0px),
+        var(--matchup-selected-shift-y, 0px)
+      )
+      scale(1);
   }
 }

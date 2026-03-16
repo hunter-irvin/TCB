@@ -6,17 +6,20 @@ import type { ReactNode } from "react";
 
 const tabs = [
   { href: "/roster", label: "Roster" },
-  { href: "/teams", label: "Teams" }
+  { href: "/teams", label: "Teams" },
+  { href: "/matchup-tinder", label: "Matchup Tinder" }
 ];
 
 export function AppShell({
   title,
   copy,
-  children
+  children,
+  showNav = true
 }: {
   title: string;
-  copy: string;
+  copy: ReactNode;
   children: ReactNode;
+  showNav?: boolean;
 }) {
   const pathname = usePathname();
 
@@ -26,18 +29,20 @@ export function AppShell({
         <header className="page-header">
           <div>
             <h1 className="page-title">{title}</h1>
-            <p className="page-copy">{copy}</p>
+            <div className="page-copy">{copy}</div>
           </div>
-          <nav className="tabs" aria-label="Primary">
-            {tabs.map((tab) => {
-              const active = pathname === tab.href;
-              return (
-                <Link key={tab.href} className={`tab${active ? " active" : ""}`} href={tab.href}>
-                  {tab.label}
-                </Link>
-              );
-            })}
-          </nav>
+          {showNav ? (
+            <nav className="tabs" aria-label="Primary">
+              {tabs.map((tab) => {
+                const active = pathname === tab.href;
+                return (
+                  <Link key={tab.href} className={`tab${active ? " active" : ""}`} href={tab.href}>
+                    {tab.label}
+                  </Link>
+                );
+              })}
+            </nav>
+          ) : null}
         </header>
         {children}
       </div>
