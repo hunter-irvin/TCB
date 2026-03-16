@@ -487,7 +487,7 @@ export function MatchupTinderPage() {
       title="Matchup Tinder"
       copy={
         <div className="matchup-tinder-header-copy">
-          Drag the ball toward offense, defense, or straight up for a balanced player matchup.
+          Drag the ball to indicate if it's a good matchup, or if offense or defense wins.
           Good player matchups will be used to help generate teams with fair matchups at each
           position.
         </div>
