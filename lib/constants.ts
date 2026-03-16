@@ -40,7 +40,7 @@ export const PLAYER_ATTRIBUTE_GROUPS: Array<{
     ]
   },
   {
-    label: "Misc",
+    label: "Miscellaneous",
     tone: "misc",
     attributes: [
       { key: "playmaking", label: "Activity Level" },

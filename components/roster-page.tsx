@@ -15,25 +15,23 @@ import type {
   PlayerAttributeRating,
   PlayerAttributes,
   PlayerChemistry,
-  PlayerChemistryKind,
   Position
 } from "@/lib/types";
 
 const ATTRIBUTE_RATINGS: PlayerAttributeRating[] = [1, 2, 3, 4, 5];
 const CHEMISTRY_COLUMNS: Array<{
-  key: PlayerChemistryKind;
+  key: "bonus";
   label: string;
-  sortKey: "chemistryBonus" | "chemistryTax";
+  sortKey: "chemistryBonus";
 }> = [
-  { key: "bonus", label: "Bonus", sortKey: "chemistryBonus" },
-  { key: "tax", label: "Tax", sortKey: "chemistryTax" }
+  { key: "bonus", label: "Bonus", sortKey: "chemistryBonus" }
 ];
 const ROSTER_MIN_WIDTHS = {
   rowNumber: 28,
   playerName: 150,
   positions: 138,
   attribute: 50,
-  chemistry: 62,
+  chemistry: 84,
   actions: 44
 } as const;
 const ROSTER_EXTRA_WEIGHTS = {
@@ -168,10 +166,10 @@ function sortPlayers(players: Player[], sortState: RosterSortState) {
         getLowestPosition(right.positions),
         sortState.direction
       );
-    } else if (sortState.key === "chemistryBonus" || sortState.key === "chemistryTax") {
+    } else if (sortState.key === "chemistryBonus") {
       primary = compareNullableNumbers(
-        left.chemistry[sortState.key === "chemistryBonus" ? "bonus" : "tax"].length,
-        right.chemistry[sortState.key === "chemistryBonus" ? "bonus" : "tax"].length,
+        left.chemistry.bonus.length,
+        right.chemistry.bonus.length,
         sortState.direction
       );
     } else {
@@ -470,11 +468,11 @@ function RosterRow({
   ) => void;
   onChemistryChange: (
     playerId: number,
-    kind: PlayerChemistryKind,
+    kind: "bonus",
     chemistryPlayerIds: number[]
   ) => void;
 }) {
-  const [openPanel, setOpenPanel] = useState<"menu" | PlayerChemistryKind | null>(null);
+  const [openPanel, setOpenPanel] = useState<"menu" | "bonus" | null>(null);
   const rowRef = useRef<HTMLTableRowElement | null>(null);
   const playerLabelById = useMemo(
     () =>
@@ -582,16 +580,13 @@ function RosterRow({
       )}
       {CHEMISTRY_COLUMNS.map((column) => {
         const activeSelection = [...chemistry[column.key]].sort(comparePlayerLabels);
-        const otherSelection = chemistry[column.key === "bonus" ? "tax" : "bonus"];
         const remainingPlayers =
           activeSelection.length >= MAX_PLAYER_CHEMISTRY_LINKS
             ? []
             : players
                 .filter(
                   (player) =>
-                    player.id !== id &&
-                    !activeSelection.includes(player.id) &&
-                    !otherSelection.includes(player.id)
+                    player.id !== id && !activeSelection.includes(player.id)
                 )
                 .sort((left, right) =>
                   (playerLabelById.get(left.id) ?? `Player ${left.rowNumber}`).localeCompare(

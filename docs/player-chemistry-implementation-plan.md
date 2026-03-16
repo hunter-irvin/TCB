@@ -1,297 +1,224 @@
-# Player Chemistry Implementation Plan
+# Player Chemistry Revision Plan
 
 ## Goal
 
-Add a new `Chemistry` category to the roster and teams flows so users can define player-to-player chemistry relationships and see how those relationships affect team scenarios.
+Revise the chemistry feature after user feedback.
 
-This feature should:
+This iteration should:
 
-- add two chemistry subcategories on the roster:
-  - `Bonus`
-  - `Tax`
-- show the count of mapped players in each chemistry column
-- allow editing chemistry links from the roster
-- persist chemistry data to Supabase
-- add a chemistry chart to the Teams page that can go positive or negative
+- keep chemistry bonus
+- remove chemistry tax from the roster experience and Teams analytics
+- remove the separate chemistry chart from the Teams page
+- add chemistry bonus into the existing `Misc` chart as a fourth segment
+- render the chemistry segment in a distinct chemistry color that matches the roster chemistry styling
+- keep the chemistry segment at the top of the `Misc` stack
 
-## Confirmed Product Decisions
+## Open Questions To Confirm
 
-- Chemistry mappings are directional.
+- Should `tax` be removed only from the product surface, or should we also remove stored `tax` rows from Supabase in the same release?
+  - Recommendation: ship the UI and analytics rollback first, then do data cleanup in a follow-up unless product wants a hard reset immediately.
+- Should chemistry bonus contribute to the displayed `Misc` total above the bar?
+  - Recommendation: yes, so the total always matches the visible stack.
+- Should the chemistry segment use the existing roster chemistry accent as a fixed color, or a team-tinted version of that accent?
+  - Recommendation: use a fixed chemistry accent so it is clearly distinguishable from the other `Misc` subcategories.
+- Should a zero-value chemistry segment render as a zero-height segment, or be omitted entirely?
+  - Recommendation: omit it visually when the value is `0` while still including chemistry in the total calculation logic.
+
+## Confirmed Product Direction
+
+- Chemistry bonus remains directional.
   - If Player A has a bonus with Player B, Player B does not automatically get one back.
-- A player cannot map the same target player into both `bonus` and `tax`.
-- Chemistry should persist to Supabase.
-- Team chemistry scoring is:
+- Chemistry tax is no longer part of the intended user experience.
+- Each player can still have up to 5 chemistry bonus links unless product changes that cap.
+- Default chemistry remains empty.
+- Team chemistry scoring becomes bonus-only:
   - `+1` for each bonus-linked teammate on the same team
-  - `-1` for each tax-linked teammate on the same team
-- The Teams chemistry chart range is `-20` to `+20`.
-- Each player can have up to 5 bonus links and up to 5 tax links.
-- Default chemistry is empty for both lists.
+- Teams analytics should show chemistry inside `Misc`, not in a dedicated fourth chart.
 
-## Recommended Data Model
+## Recommended UX Changes
 
-### Persistence Model
+### Roster
 
-Use a new relational table instead of storing JSON arrays directly on `players`.
+Keep chemistry editing in the roster, but simplify it to bonus-only.
 
-Recommended table:
+Recommended changes:
 
-- `player_chemistry`
-  - `id bigint generated always as identity primary key`
-  - `source_player_id bigint not null references public.players(id) on delete cascade`
-  - `target_player_id bigint not null references public.players(id) on delete cascade`
-  - `kind text not null check (kind in ('bonus', 'tax'))`
-  - `created_at timestamptz not null default now()`
-  - `updated_at timestamptz not null default now()`
-
-Recommended constraints:
-
-- unique `(source_player_id, target_player_id)`
-  - prevents duplicate mappings
-  - also prevents the same target from being both bonus and tax for one source player
-- check `source_player_id <> target_player_id`
-  - prevents self-links
-
-Recommended enforcement:
-
-- application-level validation for the max of 5 per kind
-- optional database trigger later if we want hard DB enforcement
-
-### App Model
-
-Expose chemistry on each player as two arrays so the UI remains simple:
-
-```ts
-type PlayerChemistry = {
-  bonus: number[];
-  tax: number[];
-};
-
-type Player = {
-  id: number;
-  rowNumber: number;
-  name: string;
-  positions: Position[];
-  attributes: PlayerAttributes;
-  chemistry: PlayerChemistry;
-};
-```
-
-This gives us the UX the product wants while keeping persistence normalized in Supabase.
-
-## Roster UX
-
-### Table Layout
-
-Add a new major category:
-
-- `Chemistry`
-
-With two subcolumns:
-
-- `Bonus`
-- `Tax`
-
-Each cell should display the number of mapped players for that player and kind.
-
-Examples:
-
-- `0`
-- `2`
-- `5`
-
-### Editing Behavior
-
-When the user clicks a chemistry count cell:
-
-- open a popover/dropdown for that player and chemistry kind
-- show two containers:
-  - `Active Selection`
-  - `Remaining Players`
-
-Active Selection behavior:
-
-- show selected player names
-- show an `x` next to each selected player
-- clicking `x` removes that mapping immediately
-
-Remaining Players behavior:
-
-- show all other eligible players not already selected in either bonus or tax for that player
-- clicking a player adds that player to the active list for the current chemistry kind
-- the count in the roster cell updates immediately
-
-Limit behavior:
-
+- keep the `Chemistry` group header if we want continuity, but show only one subcolumn:
+  - `Bonus`
+- remove the `Tax` subcolumn
+- each cell should continue to display the count of mapped bonus players
+- clicking the bonus count should keep the current popover pattern, but only for the bonus list
+- `Remaining Players` should exclude:
+  - the player themselves
+  - players already selected in `bonus`
 - if the active list reaches 5 players:
-  - hide the remaining players list
-  - show the message `Only 5 players allowed`
+  - hide the remaining list
+  - show `Only 5 players allowed`
 
-Default behavior:
+### Teams Page Analytics
 
-- all players start with `bonus = []`
-- all players start with `tax = []`
-- roster cells display `0` when empty
+Replace the current chemistry card with a synthetic segment inside the `Misc` chart.
 
-### Filtering Rules
+Recommended behavior:
 
-For a player editing `bonus`:
+- keep only three analytics cards:
+  - `Offense`
+  - `Defense`
+  - `Misc`
+- for each team, compute a chemistry bonus total using the existing directional bonus rules
+- append a `Chemistry` segment to the `Misc` stack for that team
+- always append chemistry after the existing `Misc` attributes so it renders on top of the stack
+- include chemistry bonus in the displayed `Misc` total
+- label the segment and tooltip as `Chemistry`
 
-- exclude the player themselves
-- exclude players already in `bonus`
-- exclude players already in `tax`
+## Chart Scale Impact
 
-For a player editing `tax`:
+The current chart system uses a shared max total of `75`.
 
-- exclude the player themselves
-- exclude players already in `tax`
-- exclude players already in `bonus`
+Today that works because each chart contains three attributes, each with a practical team max of `25`.
 
-## Teams Page Analytics
+After chemistry is merged into `Misc`:
 
-### Scoring Rule
+- `Misc` max becomes `95`
+  - `75` from existing misc attributes
+  - `20` from chemistry bonus
 
-For each team in a scenario:
+Recommended approach:
 
-- gather the 5 assigned player IDs on that team
-- for each assigned player:
-  - add `+1` for every `bonus` target also on that same team
-  - add `-1` for every `tax` target also on that same team
+- move from one shared chart max to a per-chart max
+- keep `Offense` at `75`
+- keep `Defense` at `75`
+- set `Misc` to `95`
 
-This score is directional by design.
+This avoids shrinking the offense and defense bars just to make room for chemistry in `Misc`.
 
-Example:
+## State and Persistence Strategy
 
-- A bonus B
-- B has no link to A
-- if A and B are on the same team, total contribution is `+1`, not `+2`
+### Recommended Rollout Order
 
-### Chart Design
+Use a staged approach unless product explicitly wants immediate schema cleanup.
 
-Add a new chemistry chart card to the Teams page analytics section.
+Stage 1:
 
-Requirements:
+- remove `tax` from roster UI and Teams analytics
+- stop using `tax` in scoring
+- stop rendering the dedicated chemistry chart
+- preserve existing persisted `tax` data temporarily if that reduces migration risk
 
-- one total per team
-- range from `-20` to `+20`
-- visually support both positive and negative totals
-- zero should be the center baseline
+Stage 2:
 
-Recommended rendering approach:
+- remove `tax` from frontend types and helpers
+- remove `tax` writes from the sync path
+- delete or archive existing `tax` rows in `player_chemistry`
+- tighten DB constraints if we want the schema to become bonus-only permanently
 
-- use a centered vertical bar with:
-  - upward fill for positive values
-  - downward fill for negative values
-- show the numeric total above or centered near the bar
-- keep hover or focus tooltip behavior consistent with the existing chart system
+### Frontend State
 
-## State and Sync Changes
-
-### Local State
-
-Update:
+Likely touchpoints:
 
 - `lib/types.ts`
 - `lib/state.ts`
+- `components/roster-page.tsx`
+- `components/teams-page.tsx`
 - `components/tournament-builder.tsx`
 - `lib/supabase/tcb.ts`
+- `lib/constants.ts`
 
-Required changes:
+Recommended changes:
 
-- add chemistry to `Player`
-- sanitize chemistry arrays on load
-- preserve chemistry during temp ID remaps
-- include chemistry in player equality checks
-- load chemistry rows from Supabase and stitch them onto each player
-- write chemistry changes back to Supabase
+- simplify roster state and sorting to bonus-only
+- remove team analytics dependence on `tax`
+- replace chemistry-total chart data with chemistry-segment chart data
+- introduce an explicit chemistry segment style path so it does not inherit the default misc segment treatment
 
-### Sync Strategy
+### Persistence
 
-Recommended sync approach:
+Current persistence can stay functional during Stage 1, but we should be deliberate about how much cleanup we want in this pass.
 
-- continue syncing `players` through the existing flow
-- sync chemistry relationships as a second related dataset
-- when temporary player IDs are replaced with real Supabase IDs, remap chemistry arrays in memory before writeback
+Two options:
 
-Important behavior:
-
-- deleting a player should remove:
-  - the player
-  - all chemistry rows where they are the source
-  - all chemistry rows where they are the target
-
-Using `on delete cascade` handles the backend cleanup safely.
-
-## Sample Test Data
-
-It is fine to seed temporary chemistry mappings for testing.
-
-Recommended temporary sample coverage:
-
-- at least one player with 0 bonus and 0 tax
-- at least one player with multiple bonus links
-- at least one player with multiple tax links
-- at least one team scenario where chemistry becomes positive
-- at least one team scenario where chemistry becomes negative
-
-These mappings can be overwritten later.
+- Minimal-risk rollout:
+  - hide and ignore `tax`
+  - keep reading existing `tax` rows harmlessly until cleanup
+- Full cleanup rollout:
+  - delete `tax` rows
+  - remove `tax` from app types and Supabase mapping logic
+  - optionally migrate `player_chemistry.kind` to bonus-only constraints
 
 ## Implementation Phases
 
-### Phase 1: Schema and types
+### Phase 1: Confirm Scope
 
-- Add a migration for `player_chemistry`
-- Extend `Player` types with `chemistry`
-- Add sanitization helpers for chemistry arrays
-- Update player equality and remap helpers
+- confirm whether `tax` removal is product-only or data-model-deep
+- confirm the exact chemistry segment color rule
+- confirm that `Misc` total should include chemistry
 
-### Phase 2: Supabase read/write path
+### Phase 2: Roster Bonus-Only Update
 
-- Load chemistry rows alongside players
-- Combine player rows and chemistry rows into hydrated `Player` objects
-- Write chemistry edits back to Supabase
-- Ensure delete cascade behavior works
+- remove the `Tax` column from the roster table
+- remove tax sorting and tax-specific popover flows
+- keep the `Bonus` editor and count behavior
+- update any chemistry copy that still implies bonus and tax both exist
 
-### Phase 3: Roster chemistry UI
+### Phase 3: Teams Misc Chart Integration
 
-- Add the `Chemistry` group and `Bonus` and `Tax` columns
-- Render counts in cells
-- Build the chemistry popover
-- Add active/remove and remaining/add flows
-- Enforce the 5-player limit
+- replace the separate chemistry totals builder with a chemistry bonus segment builder
+- inject a `Chemistry` segment into each `Misc` team stack
+- ensure chemistry is always the last segment in the array so it renders on top
+- remove the dedicated chemistry chart card and its centered positive/negative bar treatment
 
-### Phase 4: Teams chemistry chart
+### Phase 4: Chart Styling and Scale
 
-- Compute chemistry totals from current scenario assignments
-- Add a chart model for chemistry totals
-- Render the new chart with a centered zero baseline
+- add a dedicated chemistry segment color that matches the roster chemistry styling
+- keep chemistry visually distinct from the standard misc subcategory colors
+- move chart sizing from a single shared max to per-chart max handling
+- verify tooltips, totals, and aria labels all reflect the new `Misc` + `Chemistry` structure
 
-### Phase 5: Verification
+### Phase 5: Persistence Cleanup
 
-- Verify add/remove behavior in roster
-- Verify no overlap between bonus and tax
-- Verify counts update immediately
-- Verify reload and realtime refresh preserve chemistry
-- Verify team chemistry totals match expected scenarios
+If product wants full removal now:
+
+- remove `tax` from app types and validation helpers
+- stop loading and writing `tax`
+- add a cleanup migration or delete path for existing `tax` rows
+- simplify constraints and helper logic to bonus-only chemistry
+
+If product wants the safer staged rollout:
+
+- leave the schema in place for now
+- document that `tax` is intentionally ignored by current UX and analytics
+- schedule a follow-up cleanup task after rollout confidence improves
+
+### Phase 6: Verification
+
+- verify bonus add/remove still works from the roster
+- verify bonus counts persist after reload
+- verify `tax` no longer changes totals or visuals
+- verify there are only three analytics cards on the Teams page
+- verify the `Misc` total equals:
+  - misc attribute total
+  - plus chemistry bonus
+- verify the chemistry segment uses the distinct chemistry color
+- verify the chemistry segment always appears on top of the `Misc` stack
+- verify `Misc` bars do not clip when chemistry bonus is high
 
 ## Acceptance Criteria
 
-- Roster shows a `Chemistry` group with `Bonus` and `Tax` columns.
-- New and existing players default to `0` chemistry counts unless mappings exist.
-- Clicking a chemistry value opens an editor with `Active Selection` and `Remaining Players`.
-- Removing a player from active selection updates the count immediately.
-- Adding a player from remaining updates the count immediately.
-- A player cannot add themselves to chemistry.
-- A player cannot place the same target in both bonus and tax.
-- A player cannot exceed 5 bonus targets or 5 tax targets.
-- When a chemistry list reaches 5, the remaining list is hidden and `Only 5 players allowed` is shown.
-- Chemistry persists after reload through Supabase.
-- Deleting a player removes their related chemistry edges.
-- Teams page shows a chemistry chart for each scenario.
-- Chemistry totals are directional and use a `-20` to `+20` scale.
+- Roster shows chemistry bonus only.
+- Users can add and remove up to 5 bonus links per player.
+- The roster no longer exposes chemistry tax.
+- Teams page shows only `Offense`, `Defense`, and `Misc` charts.
+- The separate chemistry chart no longer appears.
+- `Misc` contains a `Chemistry` segment for each team when chemistry bonus is present.
+- The chemistry segment uses the agreed chemistry-specific color and is visually distinct from the other misc segments.
+- The chemistry segment always renders at the top of the `Misc` stack.
+- The displayed `Misc` total includes chemistry bonus.
+- Chemistry scoring is bonus-only and remains directional.
+- Existing tax data no longer affects the user-visible roster or analytics.
 
 ## Main Risks
 
-- The current player sync flow is single-table oriented, so chemistry persistence will require a careful multi-table sync path.
-- Temporary player IDs for newly added roster rows must be remapped before chemistry writes become valid.
-- The roster chemistry editor introduces a more complex popover than the current row controls, so click-outside and focus behavior need careful handling.
-- The Teams analytics section currently assumes only positive stacked charts, so chemistry likely needs a separate chart rendering path rather than a small patch to the existing one.
+- If `tax` rows remain in the database temporarily, future code can accidentally start using them again unless the read and scoring paths are explicit.
+- The current shared chart max of `75` will under-scale or clip `Misc` once chemistry is included unless we adjust the chart sizing model.
+- Using a fixed chemistry accent improves distinction, but it may reduce the current per-team color feel unless we intentionally balance both.
+- Removing the dedicated chemistry chart changes expected visuals and may require updates to any screenshot-based QA notes or tests.
