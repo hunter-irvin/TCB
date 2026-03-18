@@ -125,6 +125,8 @@ export function MatchupTinderPage() {
   const goodMatchupTargetRef = useRef<HTMLButtonElement | null>(null);
   const offenseVideoRef = useRef<HTMLVideoElement | null>(null);
   const defenseVideoRef = useRef<HTMLVideoElement | null>(null);
+  const offenseVideoCleanupRef = useRef<(() => void) | null>(null);
+  const defenseVideoCleanupRef = useRef<(() => void) | null>(null);
 
   const currentMatchupKey = matchup?.matchupKey ?? null;
   const busy = status === "loading" || status === "resolving" || showReadyToPlayModal;
@@ -231,21 +233,52 @@ export function MatchupTinderPage() {
     };
 
     playVideo();
-    const timeoutId = window.setTimeout(playVideo, 180);
+    const animationFrameId = window.requestAnimationFrame(playVideo);
+    const retryTimeoutIds = [
+      window.setTimeout(playVideo, 120),
+      window.setTimeout(playVideo, 300)
+    ];
     video.addEventListener("loadeddata", playVideo);
     video.addEventListener("canplay", playVideo);
+    video.addEventListener("suspend", playVideo);
 
     return () => {
-      window.clearTimeout(timeoutId);
+      window.cancelAnimationFrame(animationFrameId);
+      retryTimeoutIds.forEach((timeoutId) => window.clearTimeout(timeoutId));
       video.removeEventListener("loadeddata", playVideo);
       video.removeEventListener("canplay", playVideo);
+      video.removeEventListener("suspend", playVideo);
     };
   }, []);
 
+  const setOffenseVideoElement = useCallback(
+    (video: HTMLVideoElement | null) => {
+      offenseVideoCleanupRef.current?.();
+      offenseVideoCleanupRef.current = null;
+      offenseVideoRef.current = video;
+
+      if (video) {
+        offenseVideoCleanupRef.current = ensureVideoPlayback(video);
+      }
+    },
+    [ensureVideoPlayback]
+  );
+
+  const setDefenseVideoElement = useCallback(
+    (video: HTMLVideoElement | null) => {
+      defenseVideoCleanupRef.current?.();
+      defenseVideoCleanupRef.current = null;
+      defenseVideoRef.current = video;
+
+      if (video) {
+        defenseVideoCleanupRef.current = ensureVideoPlayback(video);
+      }
+    },
+    [ensureVideoPlayback]
+  );
+
   useEffect(() => {
-    const cleanupOffense = ensureVideoPlayback(offenseVideoRef.current);
-    const cleanupDefense = ensureVideoPlayback(defenseVideoRef.current);
-    const animationFrameId = window.requestAnimationFrame(() => {
+    const replayVideos = () => {
       const replayOffense = offenseVideoRef.current?.play();
       if (replayOffense) {
         void replayOffense.catch(() => {});
@@ -255,14 +288,21 @@ export function MatchupTinderPage() {
       if (replayDefense) {
         void replayDefense.catch(() => {});
       }
-    });
+    };
+
+    const animationFrameId = window.requestAnimationFrame(replayVideos);
+    const timeoutId = window.setTimeout(replayVideos, 180);
 
     return () => {
       window.cancelAnimationFrame(animationFrameId);
-      cleanupOffense();
-      cleanupDefense();
+      window.clearTimeout(timeoutId);
     };
-  }, [ensureVideoPlayback, roundSeed, showInfoModal]);
+  }, [currentMatchupKey, showInfoModal]);
+
+  useEffect(() => () => {
+    offenseVideoCleanupRef.current?.();
+    defenseVideoCleanupRef.current?.();
+  }, []);
 
   const getCompletionOffset = useCallback((choice: MatchupTinderResult): DragOffset => {
     const ballLane = ballLaneRef.current;
@@ -623,7 +663,7 @@ export function MatchupTinderPage() {
                   <span className="matchup-tinder-role-tag">Offense</span>
                   <span className="matchup-tinder-media-frame" aria-hidden="true">
                     <video
-                      ref={offenseVideoRef}
+                      ref={setOffenseVideoElement}
                       className="matchup-tinder-media"
                       src={offenseVideoSource}
                       autoPlay
@@ -678,7 +718,7 @@ export function MatchupTinderPage() {
                   <span className="matchup-tinder-role-tag">Defense</span>
                   <span className="matchup-tinder-media-frame" aria-hidden="true">
                     <video
-                      ref={defenseVideoRef}
+                      ref={setDefenseVideoElement}
                       className="matchup-tinder-media"
                       src={defenseVideoSource}
                       autoPlay
