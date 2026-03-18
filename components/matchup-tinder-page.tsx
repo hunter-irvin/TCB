@@ -123,6 +123,8 @@ export function MatchupTinderPage() {
   const offenseTargetRef = useRef<HTMLButtonElement | null>(null);
   const defenseTargetRef = useRef<HTMLButtonElement | null>(null);
   const goodMatchupTargetRef = useRef<HTMLButtonElement | null>(null);
+  const offenseVideoRef = useRef<HTMLVideoElement | null>(null);
+  const defenseVideoRef = useRef<HTMLVideoElement | null>(null);
 
   const currentMatchupKey = matchup?.matchupKey ?? null;
   const busy = status === "loading" || status === "resolving" || showReadyToPlayModal;
@@ -209,6 +211,58 @@ export function MatchupTinderPage() {
     setTestCompletedRounds(0);
     setMode(nextMode);
   };
+
+  const ensureVideoPlayback = useCallback((video: HTMLVideoElement | null) => {
+    if (!video) {
+      return () => {};
+    }
+
+    video.muted = true;
+    video.defaultMuted = true;
+    video.playsInline = true;
+    video.setAttribute("muted", "");
+    video.setAttribute("playsinline", "");
+
+    const playVideo = () => {
+      const playPromise = video.play();
+      if (playPromise) {
+        void playPromise.catch(() => {});
+      }
+    };
+
+    playVideo();
+    const timeoutId = window.setTimeout(playVideo, 180);
+    video.addEventListener("loadeddata", playVideo);
+    video.addEventListener("canplay", playVideo);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+      video.removeEventListener("loadeddata", playVideo);
+      video.removeEventListener("canplay", playVideo);
+    };
+  }, []);
+
+  useEffect(() => {
+    const cleanupOffense = ensureVideoPlayback(offenseVideoRef.current);
+    const cleanupDefense = ensureVideoPlayback(defenseVideoRef.current);
+    const animationFrameId = window.requestAnimationFrame(() => {
+      const replayOffense = offenseVideoRef.current?.play();
+      if (replayOffense) {
+        void replayOffense.catch(() => {});
+      }
+
+      const replayDefense = defenseVideoRef.current?.play();
+      if (replayDefense) {
+        void replayDefense.catch(() => {});
+      }
+    });
+
+    return () => {
+      window.cancelAnimationFrame(animationFrameId);
+      cleanupOffense();
+      cleanupDefense();
+    };
+  }, [ensureVideoPlayback, roundSeed, showInfoModal]);
 
   const getCompletionOffset = useCallback((choice: MatchupTinderResult): DragOffset => {
     const ballLane = ballLaneRef.current;
@@ -311,7 +365,7 @@ export function MatchupTinderPage() {
       let showReadyToPlayModal = false;
       if (mode === "test") {
         const nextCount = testCompletedRounds + 1;
-        showReadyToPlayModal = nextCount >= 5;
+        showReadyToPlayModal = nextCount >= 3;
         setTestCompletedRounds(showReadyToPlayModal ? 0 : nextCount);
       }
 
@@ -569,6 +623,7 @@ export function MatchupTinderPage() {
                   <span className="matchup-tinder-role-tag">Offense</span>
                   <span className="matchup-tinder-media-frame" aria-hidden="true">
                     <video
+                      ref={offenseVideoRef}
                       className="matchup-tinder-media"
                       src={offenseVideoSource}
                       autoPlay
@@ -623,6 +678,7 @@ export function MatchupTinderPage() {
                   <span className="matchup-tinder-role-tag">Defense</span>
                   <span className="matchup-tinder-media-frame" aria-hidden="true">
                     <video
+                      ref={defenseVideoRef}
                       className="matchup-tinder-media"
                       src={defenseVideoSource}
                       autoPlay
