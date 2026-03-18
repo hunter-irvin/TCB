@@ -227,8 +227,11 @@ export function MatchupTinderPage() {
     video.setAttribute("autoplay", "");
     video.setAttribute("playsinline", "");
 
-    const playVideo = () => {
-      if (!video.currentSrc) {
+    let lastObservedTime = -1;
+    let stalledChecks = 0;
+
+    const playVideo = (forceReload = false) => {
+      if (forceReload || !video.currentSrc) {
         video.load();
       }
 
@@ -238,13 +241,24 @@ export function MatchupTinderPage() {
       }
     };
 
-    const isVideoPlaying = () =>
-      !video.paused &&
-      !video.ended &&
-      video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+    const verifyPlayback = () => {
+      const hasFrameData = video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+      const currentTime = video.currentTime;
+      const isAdvancing = currentTime > lastObservedTime + 0.01;
+      const isPlaying = !video.paused && !video.ended;
 
-    const forcePlayback = () => {
-      if (!isVideoPlaying()) {
+      if (hasFrameData && isPlaying && isAdvancing) {
+        stalledChecks = 0;
+        lastObservedTime = currentTime;
+        return;
+      }
+
+      stalledChecks += 1;
+      lastObservedTime = currentTime;
+
+      if (stalledChecks >= 2) {
+        playVideo(currentTime < 0.05 && hasFrameData);
+      } else {
         playVideo();
       }
     };
@@ -254,32 +268,40 @@ export function MatchupTinderPage() {
       retryTimeoutIds.forEach((timeoutId) => window.clearTimeout(timeoutId));
       window.clearInterval(intervalId);
       window.clearTimeout(stopIntervalTimeoutId);
-      video.removeEventListener("loadedmetadata", forcePlayback);
-      video.removeEventListener("loadeddata", forcePlayback);
-      video.removeEventListener("canplay", forcePlayback);
-      video.removeEventListener("canplaythrough", forcePlayback);
-      video.removeEventListener("playing", stopWatching);
-      video.removeEventListener("suspend", forcePlayback);
+      video.removeEventListener("loadedmetadata", verifyPlayback);
+      video.removeEventListener("loadeddata", verifyPlayback);
+      video.removeEventListener("canplay", verifyPlayback);
+      video.removeEventListener("canplaythrough", verifyPlayback);
+      video.removeEventListener("pause", verifyPlayback);
+      video.removeEventListener("stalled", verifyPlayback);
+      video.removeEventListener("suspend", verifyPlayback);
+      video.removeEventListener("waiting", verifyPlayback);
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
     };
 
-    forcePlayback();
-    const animationFrameId = window.requestAnimationFrame(forcePlayback);
+    verifyPlayback();
+    const animationFrameId = window.requestAnimationFrame(verifyPlayback);
     const retryTimeoutIds = [
-      window.setTimeout(forcePlayback, 120),
-      window.setTimeout(forcePlayback, 300),
-      window.setTimeout(forcePlayback, 700),
-      window.setTimeout(forcePlayback, 1200)
+      window.setTimeout(verifyPlayback, 120),
+      window.setTimeout(verifyPlayback, 300),
+      window.setTimeout(verifyPlayback, 700),
+      window.setTimeout(verifyPlayback, 1200),
+      window.setTimeout(verifyPlayback, 1800)
     ];
-    const intervalId = window.setInterval(forcePlayback, 250);
+    const intervalId = window.setInterval(verifyPlayback, 250);
     const stopIntervalTimeoutId = window.setTimeout(() => {
       window.clearInterval(intervalId);
-    }, 2000);
-    video.addEventListener("loadedmetadata", forcePlayback);
-    video.addEventListener("loadeddata", forcePlayback);
-    video.addEventListener("canplay", forcePlayback);
-    video.addEventListener("canplaythrough", forcePlayback);
-    video.addEventListener("playing", stopWatching);
-    video.addEventListener("suspend", forcePlayback);
+    }, 3000);
+    video.addEventListener("loadedmetadata", verifyPlayback);
+    video.addEventListener("loadeddata", verifyPlayback);
+    video.addEventListener("canplay", verifyPlayback);
+    video.addEventListener("canplaythrough", verifyPlayback);
+    video.addEventListener("pause", verifyPlayback);
+    video.addEventListener("stalled", verifyPlayback);
+    video.addEventListener("suspend", verifyPlayback);
+    video.addEventListener("waiting", verifyPlayback);
 
     return stopWatching;
   }, []);
@@ -703,7 +725,7 @@ export function MatchupTinderPage() {
                       muted
                       loop
                       playsInline
-                      preload="metadata"
+                      preload="auto"
                       disablePictureInPicture
                     />
                   </span>
@@ -758,7 +780,7 @@ export function MatchupTinderPage() {
                       muted
                       loop
                       playsInline
-                      preload="metadata"
+                      preload="auto"
                       disablePictureInPicture
                     />
                   </span>
