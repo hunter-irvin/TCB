@@ -14,34 +14,47 @@ export function AppShell({
   title,
   copy,
   children,
-  showNav = true
+  showNav = true,
+  headerActions = null,
+  shellClassName = "",
+  frameClassName = "",
+  headerClassName = ""
 }: {
   title: string;
   copy: ReactNode;
   children: ReactNode;
   showNav?: boolean;
+  headerActions?: ReactNode;
+  shellClassName?: string;
+  frameClassName?: string;
+  headerClassName?: string;
 }) {
   const pathname = usePathname();
 
   return (
-    <main className="shell">
-      <div className="page-frame">
-        <header className="page-header">
+    <main className={["shell", shellClassName].filter(Boolean).join(" ")}>
+      <div className={["page-frame", frameClassName].filter(Boolean).join(" ")}>
+        <header className={["page-header", headerClassName].filter(Boolean).join(" ")}>
           <div>
             <h1 className="page-title">{title}</h1>
-            <div className="page-copy">{copy}</div>
+            {copy ? <div className="page-copy">{copy}</div> : null}
           </div>
-          {showNav ? (
-            <nav className="tabs" aria-label="Primary">
-              {tabs.map((tab) => {
-                const active = pathname === tab.href;
-                return (
-                  <Link key={tab.href} className={`tab${active ? " active" : ""}`} href={tab.href}>
-                    {tab.label}
-                  </Link>
-                );
-              })}
-            </nav>
+          {headerActions || showNav ? (
+            <div className="page-header-side">
+              {headerActions}
+              {showNav ? (
+                <nav className="tabs" aria-label="Primary">
+                  {tabs.map((tab) => {
+                    const active = pathname === tab.href;
+                    return (
+                      <Link key={tab.href} className={`tab${active ? " active" : ""}`} href={tab.href}>
+                        {tab.label}
+                      </Link>
+                    );
+                  })}
+                </nav>
+              ) : null}
+            </div>
           ) : null}
         </header>
         {children}

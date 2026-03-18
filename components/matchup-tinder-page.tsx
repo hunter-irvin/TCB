@@ -57,6 +57,8 @@ const BALL_TARGET_OFFSETS: Record<MatchupTinderResult, DragOffset> = {
   defense_wins: { x: 148, y: 0 },
   good_matchup: { x: 0, y: -120 }
 };
+const MATCHUP_TINDER_INSTRUCTIONS =
+  "If it's not a good matchup, drag left or right to indicate who would win. In the future, good matchup data will be used to generate more fair teams.";
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(Math.max(value, minimum), maximum);
@@ -109,6 +111,7 @@ export function MatchupTinderPage() {
   const [selectedTargetOffset, setSelectedTargetOffset] = useState<DragOffset>({ x: 0, y: 0 });
   const [testCompletedRounds, setTestCompletedRounds] = useState(0);
   const [showReadyToPlayModal, setShowReadyToPlayModal] = useState(false);
+  const [showInfoModal, setShowInfoModal] = useState(true);
   const [roundSeed, setRoundSeed] = useState(0);
   const seenMatchupKeysRef = useRef(new Set<string>());
   const dragOffsetRef = useRef<DragOffset>({ x: 0, y: 0 });
@@ -485,14 +488,21 @@ export function MatchupTinderPage() {
   return (
     <AppShell
       title="Matchup Tinder"
-      copy={
-        <div className="matchup-tinder-header-copy">
-          Drag the ball to indicate if it's a good matchup, or if offense or defense wins.
-          Good player matchups will be used to help generate teams with fair matchups at each
-          position.
-        </div>
-      }
+      copy={null}
       showNav={false}
+      headerActions={
+        <button
+          type="button"
+          className="matchup-tinder-info-button"
+          onClick={() => setShowInfoModal(true)}
+          aria-label="Show matchup tinder instructions"
+        >
+          i
+        </button>
+      }
+      shellClassName="matchup-tinder-route-shell"
+      frameClassName="matchup-tinder-route-frame"
+      headerClassName="matchup-tinder-route-header"
     >
       <div className="matchup-tinder-page">
         <div className="matchup-tinder-toggle-block">
@@ -507,13 +517,15 @@ export function MatchupTinderPage() {
                 onClick={() => handleModeChange(option)}
                 disabled={busy}
               >
-                {option === "test" ? "Test" : "Play"}
+                <span className="matchup-tinder-toggle-button-label">
+                  {option === "test" ? "Test" : "Play"}
+                </span>
+                {option === "test" ? (
+                  <span className="matchup-tinder-toggle-button-note">Answers not recorded</span>
+                ) : null}
               </button>
             ))}
           </div>
-          {mode === "test" ? (
-            <div className="matchup-tinder-toggle-caption">Answers not recorded</div>
-          ) : null}
         </div>
 
         <section className={shellClassName}>
@@ -646,6 +658,38 @@ export function MatchupTinderPage() {
             </div>
           )}
         </section>
+
+        {showInfoModal ? (
+          <div className="matchup-tinder-modal-backdrop" role="presentation">
+            <div
+              className="matchup-tinder-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="matchup-tinder-info-title"
+              aria-describedby="matchup-tinder-info-copy"
+            >
+              <button
+                type="button"
+                className="matchup-tinder-modal-close"
+                onClick={() => setShowInfoModal(false)}
+                aria-label="Close instructions"
+              >
+                x
+              </button>
+              <h2 id="matchup-tinder-info-title">Matchup Tinder</h2>
+              <p className="matchup-tinder-info-lead">Drag the ball up to indicate a good matchup</p>
+              <div className="matchup-tinder-info-gesture" aria-hidden="true">
+                <img
+                  className="matchup-tinder-info-ball"
+                  src="/matchup-tinder/basketball.png"
+                  alt=""
+                  draggable={false}
+                />
+              </div>
+              <p id="matchup-tinder-info-copy">{MATCHUP_TINDER_INSTRUCTIONS}</p>
+            </div>
+          </div>
+        ) : null}
 
         {showReadyToPlayModal ? (
           <div className="matchup-tinder-modal-backdrop" role="presentation">

@@ -71,6 +71,13 @@ select {
   margin-bottom: 28px;
 }
 
+.page-header-side {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
 .page-title {
   margin: 0;
   font-size: clamp(1.6rem, 1.25rem + 1vw, 2.6rem);
@@ -87,6 +94,57 @@ select {
 .matchup-tinder-header-copy {
   display: grid;
   gap: 4px;
+}
+
+.matchup-tinder-info-button {
+  width: 42px;
+  height: 42px;
+  border: 1px solid rgba(255, 245, 227, 0.24);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.2);
+  color: #fff5df;
+  font-size: 1.2rem;
+  font-weight: 900;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 14px 28px rgba(0, 0, 0, 0.16);
+  transition: transform 140ms ease, background 140ms ease, box-shadow 140ms ease;
+}
+
+.matchup-tinder-info-button:hover {
+  transform: translateY(-1px);
+  background: rgba(255, 245, 227, 0.14);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 18px 32px rgba(0, 0, 0, 0.2);
+}
+
+.matchup-tinder-info-button:focus-visible,
+.matchup-tinder-modal-close:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.82);
+  outline-offset: 3px;
+}
+
+.matchup-tinder-route-shell,
+.matchup-tinder-route-frame,
+.matchup-tinder-route-header {
+  min-height: 0;
+}
+
+.page-header.matchup-tinder-route-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: 10px;
+}
+
+.page-header.matchup-tinder-route-header .page-title {
+  font-size: clamp(1.15rem, 6.8vw, 1.65rem);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .tabs {
@@ -1338,6 +1396,7 @@ select {
 .matchup-tinder-page {
   display: grid;
   gap: 16px;
+  min-height: 0;
 }
 
 .matchup-tinder-toggle-block {
@@ -1360,6 +1419,10 @@ select {
 }
 
 .matchup-tinder-toggle-button {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 2px;
   border: 0;
   border-radius: 999px;
   padding: 14px 18px;
@@ -1369,6 +1432,19 @@ select {
   font-weight: 800;
   cursor: pointer;
   transition: background 140ms ease, color 140ms ease, transform 140ms ease, box-shadow 140ms ease;
+}
+
+.matchup-tinder-toggle-button-label {
+  display: block;
+  line-height: 1;
+}
+
+.matchup-tinder-toggle-button-note {
+  display: block;
+  font-size: 0.54em;
+  font-weight: 800;
+  line-height: 1.05;
+  opacity: 0.82;
 }
 
 .matchup-tinder-toggle-button:hover:not(:disabled) {
@@ -1534,6 +1610,7 @@ select {
     linear-gradient(180deg, rgba(255, 245, 227, 0.14), rgba(255, 245, 227, 0.06));
   color: #fff5df;
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   align-content: start;
   justify-items: center;
   gap: 12px;
@@ -1579,6 +1656,7 @@ select {
 .matchup-tinder-media-frame {
   position: relative;
   width: 100%;
+  min-height: 0;
   overflow: hidden;
   display: flex;
   align-items: center;
@@ -1598,8 +1676,9 @@ select {
 .matchup-tinder-media {
   display: block;
   width: 100%;
-  height: auto;
+  height: 100%;
   max-width: 100%;
+  object-fit: contain;
   object-position: center;
   pointer-events: none;
 }
@@ -1820,6 +1899,7 @@ select {
 }
 
 .matchup-tinder-modal {
+  position: relative;
   width: min(100%, 420px);
   padding: 28px 22px 22px;
   border-radius: 24px;
@@ -1831,6 +1911,28 @@ select {
   text-align: center;
 }
 
+.matchup-tinder-modal-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(45, 22, 8, 0.08);
+  color: rgba(45, 22, 8, 0.76);
+  font-size: 1rem;
+  font-weight: 900;
+  line-height: 1;
+  cursor: pointer;
+  transition: transform 140ms ease, background 140ms ease;
+}
+
+.matchup-tinder-modal-close:hover {
+  transform: translateY(-1px);
+  background: rgba(45, 22, 8, 0.14);
+}
+
 .matchup-tinder-modal h2,
 .matchup-tinder-modal p {
   margin: 0;
@@ -1840,17 +1942,44 @@ select {
   font-size: clamp(1.7rem, 1.28rem + 1.2vw, 2.2rem);
   line-height: 1.04;
   font-weight: 900;
+  color: #2d1608;
 }
 
 .matchup-tinder-modal p {
   margin-top: 10px;
-  color: rgba(45, 22, 8, 0.72);
+  color: #2d1608;
   font-size: 0.98rem;
   line-height: 1.4;
 }
 
+.matchup-tinder-info-lead {
+  margin-top: 12px !important;
+  font-weight: 800;
+}
+
+.matchup-tinder-info-gesture {
+  position: relative;
+  width: 140px;
+  height: 150px;
+  margin: 18px auto 8px;
+}
+
+.matchup-tinder-info-ball {
+  position: absolute;
+  left: 50%;
+  bottom: 28px;
+  width: 46px;
+  height: 46px;
+  transform: translateX(-50%);
+  filter: drop-shadow(0 12px 18px rgba(45, 22, 8, 0.16));
+  animation: matchup-info-ball-swipe-up 1.5s ease-in-out infinite;
+}
+
+.matchup-tinder-modal p#matchup-tinder-info-copy {
+  font-weight: 800;
+}
+
 .matchup-tinder-modal-actions {
-  display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
   margin-top: 20px;
@@ -2005,19 +2134,171 @@ select {
   }
 }
 
+@keyframes matchup-info-ball-swipe-up {
+  0% {
+    transform: translate(-50%, 0);
+    opacity: 0;
+  }
+
+  20% {
+    opacity: 1;
+  }
+
+  65% {
+    transform: translate(-50%, -54px);
+    opacity: 1;
+  }
+
+  100% {
+    transform: translate(-50%, -70px);
+    opacity: 0;
+  }
+}
+
 @media (min-width: 1101px) {
+  .shell.matchup-tinder-route-shell {
+    height: 100dvh;
+    min-height: 100dvh;
+    overflow: hidden;
+    padding: 20px 24px 24px;
+  }
+
+  .page-frame.matchup-tinder-route-frame {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    height: 100%;
+  }
+
+  .page-header.matchup-tinder-route-header {
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+
+  .page-header.matchup-tinder-route-header .page-header-side {
+    align-self: flex-start;
+  }
+
+  .page-header.matchup-tinder-route-header .page-title {
+    font-size: clamp(1.2rem, 0.92rem + 0.72vw, 1.72rem);
+  }
+
+  .page-header.matchup-tinder-route-header .page-copy {
+    max-width: 860px;
+    font-size: clamp(0.72rem, 0.64rem + 0.24vw, 0.92rem);
+    line-height: 1.3;
+  }
+
+  .matchup-tinder-page {
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .matchup-tinder-toggle-block {
+    justify-items: center;
+    gap: 0;
+  }
+
+  .matchup-tinder-toggle {
+    max-width: 280px;
+    padding: 4px;
+  }
+
+  .matchup-tinder-toggle-button {
+    min-height: 52px;
+    padding: 6px 12px;
+    font-size: clamp(1rem, 0.82rem + 0.54vw, 1.18rem);
+  }
+
+  .matchup-tinder-toggle-button-note {
+    font-size: 0.42em;
+  }
+
   .matchup-tinder-shell {
-    max-width: 960px;
+    display: grid;
+    align-content: stretch;
+    width: min(100%, min(980px, calc(100dvh * 1.42)));
+    max-width: none;
+    height: 100%;
+    max-height: 100%;
+    padding: 12px;
+    border-radius: 24px;
+  }
+
+  .matchup-tinder-stage {
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    gap: 12px;
+    min-height: 0;
+    height: 100%;
+  }
+
+  .matchup-tinder-top-target {
+    min-height: clamp(54px, 7.2dvh, 68px);
+    padding: 10px 14px;
+    border-radius: 18px;
+  }
+
+  .matchup-tinder-top-target span {
+    font-size: clamp(1.2rem, 0.92rem + 0.86vw, 1.8rem);
   }
 
   .matchup-tinder-lanes {
-    grid-template-columns: minmax(0, 1fr) clamp(108px, 11vw, 132px) minmax(0, 1fr);
-    gap: 16px;
+    grid-template-columns: minmax(0, 1fr) clamp(96px, 8vw, 120px) minmax(0, 1fr);
+    gap: 12px;
+    min-height: 0;
+    height: 100%;
   }
 
   .matchup-tinder-lane {
-    min-height: 300px;
-    padding: 20px 16px;
+    min-height: 0;
+    padding: 14px 12px 10px;
+    gap: 10px;
+    border-radius: 24px;
+  }
+
+  .matchup-tinder-role-tag {
+    min-height: 24px;
+    padding: 0 9px;
+    font-size: 0.68rem;
+  }
+
+  .matchup-tinder-media-frame {
+    align-self: stretch;
+    height: 100%;
+    max-height: clamp(170px, 29dvh, 250px);
+    aspect-ratio: 4 / 5;
+  }
+
+  .matchup-tinder-player-name {
+    font-size: clamp(1rem, 0.82rem + 0.75vw, 1.4rem);
+  }
+
+  .matchup-tinder-player-name.compact {
+    font-size: clamp(0.94rem, 0.8rem + 0.6vw, 1.2rem);
+  }
+
+  .matchup-tinder-player-name.compressed {
+    font-size: clamp(0.88rem, 0.78rem + 0.4vw, 1.02rem);
+  }
+
+  .matchup-tinder-player-name.ultra-compressed {
+    font-size: clamp(0.8rem, 0.74rem + 0.3vw, 0.92rem);
+  }
+
+  .matchup-tinder-ball-lane {
+    min-height: 0;
+  }
+
+  .matchup-tinder-ball-shadow {
+    width: clamp(70px, 5.8vw, 84px);
+  }
+
+  .matchup-tinder-ball {
+    width: clamp(68px, 5.4vw, 82px);
+    height: clamp(68px, 5.4vw, 82px);
+  }
+
+  .matchup-tinder-skip {
+    padding: 9px 14px;
   }
 }
 
