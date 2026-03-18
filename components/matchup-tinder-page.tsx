@@ -125,8 +125,6 @@ export function MatchupTinderPage() {
   const goodMatchupTargetRef = useRef<HTMLButtonElement | null>(null);
   const offenseVideoRef = useRef<HTMLVideoElement | null>(null);
   const defenseVideoRef = useRef<HTMLVideoElement | null>(null);
-  const offenseVideoCleanupRef = useRef<(() => void) | null>(null);
-  const defenseVideoCleanupRef = useRef<(() => void) | null>(null);
 
   const currentMatchupKey = matchup?.matchupKey ?? null;
   const busy = status === "loading" || status === "resolving" || showReadyToPlayModal;
@@ -214,9 +212,9 @@ export function MatchupTinderPage() {
     setMode(nextMode);
   };
 
-  const ensureVideoPlayback = useCallback((video: HTMLVideoElement | null) => {
+  const playVideoElement = useCallback((video: HTMLVideoElement | null) => {
     if (!video) {
-      return () => {};
+      return;
     }
 
     video.muted = true;
@@ -227,137 +225,46 @@ export function MatchupTinderPage() {
     video.setAttribute("autoplay", "");
     video.setAttribute("playsinline", "");
 
-    let lastObservedTime = -1;
-    let stalledChecks = 0;
+    const playPromise = video.play();
+    if (playPromise) {
+      void playPromise.catch(() => {});
+    }
+  }, []);
 
-    const playVideo = (forceReload = false) => {
-      if (forceReload || !video.currentSrc) {
-        video.load();
-      }
-
-      const playPromise = video.play();
-      if (playPromise) {
-        void playPromise.catch(() => {});
-      }
-    };
-
-    const verifyPlayback = () => {
-      const hasFrameData = video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
-      const currentTime = video.currentTime;
-      const isAdvancing = currentTime > lastObservedTime + 0.01;
-      const isPlaying = !video.paused && !video.ended;
-
-      if (hasFrameData && isPlaying && isAdvancing) {
-        stalledChecks = 0;
-        lastObservedTime = currentTime;
+  const startVideoPlayback = useCallback(
+    (video: HTMLVideoElement | null) => {
+      if (!video) {
         return;
       }
 
-      stalledChecks += 1;
-      lastObservedTime = currentTime;
-
-      if (stalledChecks >= 2) {
-        playVideo(currentTime < 0.05 && hasFrameData);
-      } else {
-        playVideo();
-      }
-    };
-
-    const stopWatching = () => {
-      window.cancelAnimationFrame(animationFrameId);
-      retryTimeoutIds.forEach((timeoutId) => window.clearTimeout(timeoutId));
-      window.clearInterval(intervalId);
-      window.clearTimeout(stopIntervalTimeoutId);
-      video.removeEventListener("loadedmetadata", verifyPlayback);
-      video.removeEventListener("loadeddata", verifyPlayback);
-      video.removeEventListener("canplay", verifyPlayback);
-      video.removeEventListener("canplaythrough", verifyPlayback);
-      video.removeEventListener("pause", verifyPlayback);
-      video.removeEventListener("stalled", verifyPlayback);
-      video.removeEventListener("suspend", verifyPlayback);
-      video.removeEventListener("waiting", verifyPlayback);
-      video.pause();
-      video.removeAttribute("src");
+      video.currentTime = 0;
       video.load();
-    };
-
-    verifyPlayback();
-    const animationFrameId = window.requestAnimationFrame(verifyPlayback);
-    const retryTimeoutIds = [
-      window.setTimeout(verifyPlayback, 120),
-      window.setTimeout(verifyPlayback, 300),
-      window.setTimeout(verifyPlayback, 700),
-      window.setTimeout(verifyPlayback, 1200),
-      window.setTimeout(verifyPlayback, 1800)
-    ];
-    const intervalId = window.setInterval(verifyPlayback, 250);
-    const stopIntervalTimeoutId = window.setTimeout(() => {
-      window.clearInterval(intervalId);
-    }, 3000);
-    video.addEventListener("loadedmetadata", verifyPlayback);
-    video.addEventListener("loadeddata", verifyPlayback);
-    video.addEventListener("canplay", verifyPlayback);
-    video.addEventListener("canplaythrough", verifyPlayback);
-    video.addEventListener("pause", verifyPlayback);
-    video.addEventListener("stalled", verifyPlayback);
-    video.addEventListener("suspend", verifyPlayback);
-    video.addEventListener("waiting", verifyPlayback);
-
-    return stopWatching;
-  }, []);
-
-  const setOffenseVideoElement = useCallback(
-    (video: HTMLVideoElement | null) => {
-      offenseVideoCleanupRef.current?.();
-      offenseVideoCleanupRef.current = null;
-      offenseVideoRef.current = video;
-
-      if (video) {
-        offenseVideoCleanupRef.current = ensureVideoPlayback(video);
-      }
+      playVideoElement(video);
     },
-    [ensureVideoPlayback]
+    [playVideoElement]
   );
 
-  const setDefenseVideoElement = useCallback(
-    (video: HTMLVideoElement | null) => {
-      defenseVideoCleanupRef.current?.();
-      defenseVideoCleanupRef.current = null;
-      defenseVideoRef.current = video;
-
-      if (video) {
-        defenseVideoCleanupRef.current = ensureVideoPlayback(video);
-      }
+  const handleVideoReady = useCallback(
+    (event: React.SyntheticEvent<HTMLVideoElement>) => {
+      playVideoElement(event.currentTarget);
     },
-    [ensureVideoPlayback]
+    [playVideoElement]
   );
 
   useEffect(() => {
-    const replayVideos = () => {
-      const replayOffense = offenseVideoRef.current?.play();
-      if (replayOffense) {
-        void replayOffense.catch(() => {});
-      }
+    if (!currentMatchupKey) {
+      return;
+    }
 
-      const replayDefense = defenseVideoRef.current?.play();
-      if (replayDefense) {
-        void replayDefense.catch(() => {});
-      }
-    };
-
-    const animationFrameId = window.requestAnimationFrame(replayVideos);
-    const timeoutId = window.setTimeout(replayVideos, 180);
+    const animationFrameId = window.requestAnimationFrame(() => {
+      startVideoPlayback(offenseVideoRef.current);
+      startVideoPlayback(defenseVideoRef.current);
+    });
 
     return () => {
       window.cancelAnimationFrame(animationFrameId);
-      window.clearTimeout(timeoutId);
     };
-  }, [currentMatchupKey, showInfoModal]);
-
-  useEffect(() => () => {
-    offenseVideoCleanupRef.current?.();
-    defenseVideoCleanupRef.current?.();
-  }, []);
+  }, [currentMatchupKey, roundSeed, startVideoPlayback]);
 
   const getCompletionOffset = useCallback((choice: MatchupTinderResult): DragOffset => {
     const ballLane = ballLaneRef.current;
@@ -718,7 +625,7 @@ export function MatchupTinderPage() {
                   <span className="matchup-tinder-role-tag">Offense</span>
                   <span className="matchup-tinder-media-frame" aria-hidden="true">
                     <video
-                      ref={setOffenseVideoElement}
+                      ref={offenseVideoRef}
                       className="matchup-tinder-media"
                       src={offenseVideoSource}
                       autoPlay
@@ -727,6 +634,8 @@ export function MatchupTinderPage() {
                       playsInline
                       preload="auto"
                       disablePictureInPicture
+                      onLoadedData={handleVideoReady}
+                      onCanPlay={handleVideoReady}
                     />
                   </span>
                   <span
@@ -773,7 +682,7 @@ export function MatchupTinderPage() {
                   <span className="matchup-tinder-role-tag">Defense</span>
                   <span className="matchup-tinder-media-frame" aria-hidden="true">
                     <video
-                      ref={setDefenseVideoElement}
+                      ref={defenseVideoRef}
                       className="matchup-tinder-media"
                       src={defenseVideoSource}
                       autoPlay
@@ -782,6 +691,8 @@ export function MatchupTinderPage() {
                       playsInline
                       preload="auto"
                       disablePictureInPicture
+                      onLoadedData={handleVideoReady}
+                      onCanPlay={handleVideoReady}
                     />
                   </span>
                   <span
