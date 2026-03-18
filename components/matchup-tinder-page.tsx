@@ -65,16 +65,6 @@ const BALL_TARGET_OFFSETS: Record<MatchupTinderResult, DragOffset> = {
 };
 const MATCHUP_TINDER_INSTRUCTIONS =
   "If it's not a good matchup, drag left or right to indicate who would win. In the future, good matchup data will be used to generate more fair teams.";
-const HIDDEN_VIDEO_PRELOAD_STYLE: CSSProperties = {
-  position: "absolute",
-  width: 1,
-  height: 1,
-  overflow: "hidden",
-  opacity: 0,
-  pointerEvents: "none",
-  inset: -9999
-};
-
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(Math.max(value, minimum), maximum);
 }
@@ -128,7 +118,6 @@ function createRoundView(matchup: MatchupTinderMatchup): MatchupTinderRoundView 
 export function MatchupTinderPage() {
   const [mode, setMode] = useState<MatchupTinderMode>("test");
   const [currentRound, setCurrentRound] = useState<MatchupTinderRoundView | null>(null);
-  const [queuedRound, setQueuedRound] = useState<MatchupTinderRoundView | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "resolving" | "error">("loading");
   const [error, setError] = useState<string | null>(null);
   const [dragOffset, setDragOffset] = useState<DragOffset>({ x: 0, y: 0 });
@@ -152,8 +141,6 @@ export function MatchupTinderPage() {
   const goodMatchupTargetRef = useRef<HTMLButtonElement | null>(null);
   const offenseVideoRef = useRef<HTMLVideoElement | null>(null);
   const defenseVideoRef = useRef<HTMLVideoElement | null>(null);
-  const queuedOffenseVideoRef = useRef<HTMLVideoElement | null>(null);
-  const queuedDefenseVideoRef = useRef<HTMLVideoElement | null>(null);
 
   const matchup = currentRound?.matchup ?? null;
   const currentMatchupKey = currentRound?.matchup.matchupKey ?? null;
@@ -174,7 +161,6 @@ export function MatchupTinderPage() {
   const applyRoundView = useCallback(
     (nextRound: MatchupTinderRoundView) => {
       resetMotionState();
-      setQueuedRound(null);
       startTransition(() => {
         setCurrentRound(nextRound);
       });
@@ -228,7 +214,6 @@ export function MatchupTinderPage() {
   useEffect(() => {
     seenMatchupKeysRef.current = new Set();
     setCurrentRound(null);
-    setQueuedRound(null);
     resetMotionState();
     void requestNextMatchup("test", seenMatchupKeysRef.current);
   }, [requestNextMatchup, resetMotionState]);
@@ -304,25 +289,6 @@ export function MatchupTinderPage() {
       window.clearTimeout(timeoutId);
     };
   }, [currentRound, showInfoModal, startVideoPlayback]);
-
-  useEffect(() => {
-    if (!queuedRound) {
-      return;
-    }
-
-    const preloadQueuedRoundVideos = () => {
-      startVideoPlayback(queuedOffenseVideoRef.current);
-      startVideoPlayback(queuedDefenseVideoRef.current);
-    };
-
-    const animationFrameId = window.requestAnimationFrame(preloadQueuedRoundVideos);
-    const timeoutId = window.setTimeout(preloadQueuedRoundVideos, 250);
-
-    return () => {
-      window.cancelAnimationFrame(animationFrameId);
-      window.clearTimeout(timeoutId);
-    };
-  }, [queuedRound, startVideoPlayback]);
 
   const getCompletionOffset = useCallback((choice: MatchupTinderResult): DragOffset => {
     const ballLane = ballLaneRef.current;
@@ -473,15 +439,10 @@ export function MatchupTinderPage() {
 
       const preparedRoundPromise = (
         choice === "skip" ? finishSkip() : finishResponse(choice)
-      ).then((preparedRound) => {
-        const nextRound = createRoundView(preparedRound.nextMatchup);
-        setQueuedRound(nextRound);
-
-        return {
-          preparedRound,
-          nextRound
-        };
-      });
+      ).then((preparedRound) => ({
+        preparedRound,
+        nextRound: createRoundView(preparedRound.nextMatchup)
+      }));
 
       if (choice === "skip") {
         setFlashTransition(true);
@@ -500,7 +461,6 @@ export function MatchupTinderPage() {
         }
       } catch (submissionError) {
         resetMotionState();
-        setQueuedRound(null);
         setStatus("error");
         setError(
           submissionError instanceof Error
@@ -657,7 +617,6 @@ export function MatchupTinderPage() {
             </div>
           ) : currentRound && matchup ? (
             <div
-              key={`${mode}-${matchup.matchupKey}-${currentRound.offenseVideoSource}-${currentRound.defenseVideoSource}`}
               ref={stageRef}
               className={stageClassName}
               style={stageStyle}
@@ -780,37 +739,6 @@ export function MatchupTinderPage() {
             </div>
           )}
         </section>
-
-        {queuedRound ? (
-          <div aria-hidden="true" style={HIDDEN_VIDEO_PRELOAD_STYLE}>
-            <video
-              ref={queuedOffenseVideoRef}
-              src={queuedRound.offenseVideoSource}
-              autoPlay
-              muted
-              loop
-              playsInline
-              preload="auto"
-              disablePictureInPicture
-              onLoadedMetadata={handleVideoReady}
-              onLoadedData={handleVideoReady}
-              onCanPlay={handleVideoReady}
-            />
-            <video
-              ref={queuedDefenseVideoRef}
-              src={queuedRound.defenseVideoSource}
-              autoPlay
-              muted
-              loop
-              playsInline
-              preload="auto"
-              disablePictureInPicture
-              onLoadedMetadata={handleVideoReady}
-              onLoadedData={handleVideoReady}
-              onCanPlay={handleVideoReady}
-            />
-          </div>
-        ) : null}
 
         {showInfoModal ? (
           <div className="matchup-tinder-modal-backdrop" role="presentation">
