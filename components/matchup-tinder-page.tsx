@@ -237,7 +237,11 @@ export function MatchupTinderPage() {
         return;
       }
 
-      video.currentTime = 0;
+      try {
+        video.currentTime = 0;
+      } catch {
+        // Safari can reject seeks before metadata is ready; a later ready event will retry play.
+      }
       video.load();
       playVideoElement(video);
     },
@@ -256,15 +260,19 @@ export function MatchupTinderPage() {
       return;
     }
 
-    const animationFrameId = window.requestAnimationFrame(() => {
+    const playCurrentRoundVideos = () => {
       startVideoPlayback(offenseVideoRef.current);
       startVideoPlayback(defenseVideoRef.current);
-    });
+    };
+
+    const animationFrameId = window.requestAnimationFrame(playCurrentRoundVideos);
+    const timeoutId = window.setTimeout(playCurrentRoundVideos, 250);
 
     return () => {
       window.cancelAnimationFrame(animationFrameId);
+      window.clearTimeout(timeoutId);
     };
-  }, [currentMatchupKey, roundSeed, startVideoPlayback]);
+  }, [currentMatchupKey, roundSeed, showInfoModal, startVideoPlayback]);
 
   const getCompletionOffset = useCallback((choice: MatchupTinderResult): DragOffset => {
     const ballLane = ballLaneRef.current;
@@ -634,6 +642,7 @@ export function MatchupTinderPage() {
                       playsInline
                       preload="auto"
                       disablePictureInPicture
+                      onLoadedMetadata={handleVideoReady}
                       onLoadedData={handleVideoReady}
                       onCanPlay={handleVideoReady}
                     />
@@ -691,6 +700,7 @@ export function MatchupTinderPage() {
                       playsInline
                       preload="auto"
                       disablePictureInPicture
+                      onLoadedMetadata={handleVideoReady}
                       onLoadedData={handleVideoReady}
                       onCanPlay={handleVideoReady}
                     />
