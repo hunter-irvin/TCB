@@ -7,7 +7,8 @@ import type { ReactNode } from "react";
 const tabs = [
   { href: "/roster", label: "Roster" },
   { href: "/teams", label: "Teams" },
-  { href: "/matchup-tinder", label: "Matchup Tinder" }
+  { href: "/matchup-tinder", label: "Matchup Tinder" },
+  { href: "/matchup-visualizer", label: "Matchup Visualizer" }
 ];
 
 export function AppShell({
