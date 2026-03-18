@@ -222,33 +222,66 @@ export function MatchupTinderPage() {
     video.muted = true;
     video.defaultMuted = true;
     video.playsInline = true;
+    video.autoplay = true;
     video.setAttribute("muted", "");
+    video.setAttribute("autoplay", "");
     video.setAttribute("playsinline", "");
 
     const playVideo = () => {
+      if (!video.currentSrc) {
+        video.load();
+      }
+
       const playPromise = video.play();
       if (playPromise) {
         void playPromise.catch(() => {});
       }
     };
 
-    playVideo();
-    const animationFrameId = window.requestAnimationFrame(playVideo);
-    const retryTimeoutIds = [
-      window.setTimeout(playVideo, 120),
-      window.setTimeout(playVideo, 300)
-    ];
-    video.addEventListener("loadeddata", playVideo);
-    video.addEventListener("canplay", playVideo);
-    video.addEventListener("suspend", playVideo);
+    const isVideoPlaying = () =>
+      !video.paused &&
+      !video.ended &&
+      video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
 
-    return () => {
+    const forcePlayback = () => {
+      if (!isVideoPlaying()) {
+        playVideo();
+      }
+    };
+
+    const stopWatching = () => {
       window.cancelAnimationFrame(animationFrameId);
       retryTimeoutIds.forEach((timeoutId) => window.clearTimeout(timeoutId));
-      video.removeEventListener("loadeddata", playVideo);
-      video.removeEventListener("canplay", playVideo);
-      video.removeEventListener("suspend", playVideo);
+      window.clearInterval(intervalId);
+      window.clearTimeout(stopIntervalTimeoutId);
+      video.removeEventListener("loadedmetadata", forcePlayback);
+      video.removeEventListener("loadeddata", forcePlayback);
+      video.removeEventListener("canplay", forcePlayback);
+      video.removeEventListener("canplaythrough", forcePlayback);
+      video.removeEventListener("playing", stopWatching);
+      video.removeEventListener("suspend", forcePlayback);
     };
+
+    forcePlayback();
+    const animationFrameId = window.requestAnimationFrame(forcePlayback);
+    const retryTimeoutIds = [
+      window.setTimeout(forcePlayback, 120),
+      window.setTimeout(forcePlayback, 300),
+      window.setTimeout(forcePlayback, 700),
+      window.setTimeout(forcePlayback, 1200)
+    ];
+    const intervalId = window.setInterval(forcePlayback, 250);
+    const stopIntervalTimeoutId = window.setTimeout(() => {
+      window.clearInterval(intervalId);
+    }, 2000);
+    video.addEventListener("loadedmetadata", forcePlayback);
+    video.addEventListener("loadeddata", forcePlayback);
+    video.addEventListener("canplay", forcePlayback);
+    video.addEventListener("canplaythrough", forcePlayback);
+    video.addEventListener("playing", stopWatching);
+    video.addEventListener("suspend", forcePlayback);
+
+    return stopWatching;
   }, []);
 
   const setOffenseVideoElement = useCallback(
