@@ -1,8 +1,6 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
 import {
-  buildMatchupVisualizerResponse,
-  isMatchupVisualizerPerspective,
-  isMatchupVisualizerView,
+  buildMatchupVisualizerBundleResponse,
   MATCHUP_VISUALIZER_MIN_COUNT,
   matchupVisualizerNodesFromRows
 } from "@/lib/matchup-visualizer";
@@ -12,22 +10,12 @@ import { getSupabaseServerClient } from "@/lib/supabase/server";
 const PLAYER_SELECT_COLUMNS = "id,row_number,name";
 const RESPONSE_SELECT_COLUMNS = "offense_player_id,defense_player_id,result";
 
-export async function GET(request: NextRequest) {
+export async function GET() {
   if (!hasSupabasePublicConfig()) {
     return NextResponse.json(
       { error: "Matchup Visualizer requires Supabase configuration." },
       { status: 500 }
     );
-  }
-
-  const perspectiveParam = request.nextUrl.searchParams.get("perspective") ?? "offense";
-  if (!isMatchupVisualizerPerspective(perspectiveParam)) {
-    return NextResponse.json({ error: "Invalid visualizer perspective." }, { status: 400 });
-  }
-
-  const viewParam = request.nextUrl.searchParams.get("view") ?? "good_matchup";
-  if (!isMatchupVisualizerView(viewParam)) {
-    return NextResponse.json({ error: "Invalid visualizer view." }, { status: 400 });
   }
 
   const supabase = getSupabaseServerClient();
@@ -50,11 +38,9 @@ export async function GET(request: NextRequest) {
   }
 
   const nodes = matchupVisualizerNodesFromRows(playerRows ?? []);
-  const payload = buildMatchupVisualizerResponse(
+  const payload = buildMatchupVisualizerBundleResponse(
     nodes,
     responseRows ?? [],
-    perspectiveParam,
-    viewParam,
     MATCHUP_VISUALIZER_MIN_COUNT
   );
 

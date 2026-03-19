@@ -2219,6 +2219,8 @@ select {
   letter-spacing: 0.01em;
   cursor: pointer;
   dominant-baseline: middle;
+  paint-order: stroke;
+  transform-origin: center;
   transition: opacity 160ms ease, fill 160ms ease;
 }
 

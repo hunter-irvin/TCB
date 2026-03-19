@@ -32,6 +32,22 @@ export type MatchupVisualizerResponse = {
   totalConnections: number;
 };
 
+export type MatchupVisualizerDatasetCollection = {
+  offense: {
+    good_matchup: MatchupVisualizerResponse;
+    imbalanced: MatchupVisualizerResponse;
+  };
+  defense: {
+    good_matchup: MatchupVisualizerResponse;
+    imbalanced: MatchupVisualizerResponse;
+  };
+};
+
+export type MatchupVisualizerBundleResponse = {
+  minCount: number;
+  datasets: MatchupVisualizerDatasetCollection;
+};
+
 type PlayerRow = {
   id: number;
   row_number: number;
@@ -215,6 +231,50 @@ export function buildMatchupVisualizerResponse(
   }
 
   return createMatchupVisualizerResponse(players, edges, perspective, view, minCount);
+}
+
+export function buildMatchupVisualizerBundleResponse(
+  players: MatchupVisualizerNode[],
+  rows: MatchupVisualizerResponseRow[],
+  minCount: number = MATCHUP_VISUALIZER_MIN_COUNT
+): MatchupVisualizerBundleResponse {
+  return {
+    minCount,
+    datasets: {
+      offense: {
+        good_matchup: buildMatchupVisualizerResponse(
+          players,
+          rows,
+          "offense",
+          "good_matchup",
+          minCount
+        ),
+        imbalanced: buildMatchupVisualizerResponse(
+          players,
+          rows,
+          "offense",
+          "imbalanced",
+          minCount
+        )
+      },
+      defense: {
+        good_matchup: buildMatchupVisualizerResponse(
+          players,
+          rows,
+          "defense",
+          "good_matchup",
+          minCount
+        ),
+        imbalanced: buildMatchupVisualizerResponse(
+          players,
+          rows,
+          "defense",
+          "imbalanced",
+          minCount
+        )
+      }
+    }
+  };
 }
 
 export function filterMatchupVisualizerResponse(

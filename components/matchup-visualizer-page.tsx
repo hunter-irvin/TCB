@@ -8,6 +8,7 @@ import {
   filterMatchupVisualizerResponse,
   MATCHUP_VISUALIZER_MAX_COUNT,
   MATCHUP_VISUALIZER_MIN_COUNT,
+  type MatchupVisualizerBundleResponse,
   type MatchupVisualizerPerspective,
   type MatchupVisualizerResponse,
   type MatchupVisualizerView
@@ -16,7 +17,7 @@ import {
 type MatchupVisualizerRequestState =
   | { status: "loading"; error: null; data: null }
   | { status: "error"; error: string; data: null }
-  | { status: "ready"; error: null; data: MatchupVisualizerResponse };
+  | { status: "ready"; error: null; data: MatchupVisualizerBundleResponse };
 
 const CHART_SIZE = 700;
 const CHART_HEIGHT = 540;
@@ -24,8 +25,8 @@ const CHART_CENTER_X = CHART_SIZE / 2;
 const CHART_CENTER_Y = 244;
 const OUTER_RADIUS = 172;
 const INNER_RADIUS = 162;
-const LABEL_RADIAL_DISTANCE = OUTER_RADIUS + 14;
-const LABEL_SIDE_OFFSET = 12;
+const LABEL_BASE_RADIAL_DISTANCE = OUTER_RADIUS + 24;
+const LABEL_SIDE_EXTRA_DISTANCE = 28;
 const WEDGE_VISUAL_OFFSET = 5;
 const NODE_PAD_ANGLE = 0.045;
 
@@ -81,12 +82,10 @@ function MatchupChordDiagram({
       const startAngle = -Math.PI / 2 + index * (segmentAngle + NODE_PAD_ANGLE);
       const endAngle = startAngle + segmentAngle;
       const angle = (startAngle + endAngle) / 2;
-      const isRightSide = Math.cos(angle) >= 0;
-      const labelRadialPoint = polarToCartesianFromOrigin(LABEL_RADIAL_DISTANCE, angle);
-      const labelPoint = {
-        x: labelRadialPoint.x + (isRightSide ? LABEL_SIDE_OFFSET : -LABEL_SIDE_OFFSET),
-        y: labelRadialPoint.y
-      };
+      const sideBias = Math.abs(Math.cos(angle));
+      const labelRadius =
+        LABEL_BASE_RADIAL_DISTANCE + LABEL_SIDE_EXTRA_DISTANCE * sideBias;
+      const labelPoint = polarToCartesianFromOrigin(labelRadius, angle);
 
       return {
         index,
@@ -101,8 +100,7 @@ function MatchupChordDiagram({
             innerRadius: INNER_RADIUS,
             outerRadius: OUTER_RADIUS
           }) ?? "",
-        labelPoint,
-        textAnchor: isRightSide ? "start" : "end"
+        labelPoint
       };
     });
   }, [arcGenerator, data.nodes]);
@@ -267,7 +265,8 @@ function MatchupChordDiagram({
                   data-player-id={group.node.id}
                   x={CHART_CENTER_X + group.labelPoint.x}
                   y={CHART_CENTER_Y + group.labelPoint.y}
-                  textAnchor={group.textAnchor}
+                  textAnchor="middle"
+                  dominantBaseline="middle"
                   style={{ opacity: isDimmed ? 0.22 : 1 }}
                   onPointerEnter={() => handleLabelPointerEnter(group.node.id)}
                   onPointerLeave={clearHoveredPlayer}
@@ -305,16 +304,12 @@ export function MatchupVisualizerPage() {
 
     async function load() {
       try {
-        const searchParams = new URLSearchParams({
-          perspective,
-          view
-        });
-        const response = await fetch(`/api/matchup-visualizer/chord?${searchParams.toString()}`, {
+        const response = await fetch("/api/matchup-visualizer/chord", {
           method: "GET",
           cache: "no-store",
           signal: controller.signal
         });
-        const payload = (await response.json()) as MatchupVisualizerResponse & { error?: string };
+        const payload = (await response.json()) as MatchupVisualizerBundleResponse & { error?: string };
 
         if (!response.ok) {
           throw new Error(payload.error ?? "Unable to load matchup visualization data.");
@@ -341,12 +336,13 @@ export function MatchupVisualizerPage() {
     void load();
 
     return () => controller.abort();
-  }, [perspective, view]);
+  }, []);
 
-  const readyData = requestState.status === "ready" ? requestState.data : null;
+  const readyBundle = requestState.status === "ready" ? requestState.data : null;
+  const selectedData = readyBundle ? readyBundle.datasets[perspective][view] : null;
   const filteredData = useMemo(
-    () => (readyData ? filterMatchupVisualizerResponse(readyData, minimumMatchups) : null),
-    [minimumMatchups, readyData]
+    () => (selectedData ? filterMatchupVisualizerResponse(selectedData, minimumMatchups) : null),
+    [minimumMatchups, selectedData]
   );
   const hasConnections = Boolean(filteredData && filteredData.totalConnections > 0);
   const visibleConnectionCount = filteredData?.totalConnections ?? 0;
@@ -366,21 +362,6 @@ export function MatchupVisualizerPage() {
     >
       <div className="matchup-visualizer-page">
         <div className="matchup-visualizer-controls">
-          <div className="matchup-visualizer-toggle" role="tablist" aria-label="Matchup visualizer perspective">
-            {(["offense", "defense"] as MatchupVisualizerPerspective[]).map((option) => (
-              <button
-                key={option}
-                type="button"
-                role="tab"
-                aria-selected={perspective === option}
-                className={`matchup-visualizer-toggle-button${perspective === option ? " active" : ""}`}
-                onClick={() => setPerspective(option)}
-              >
-                {option === "offense" ? "Offense" : "Defense"}
-              </button>
-            ))}
-          </div>
-
           <div className="matchup-visualizer-toggle" role="tablist" aria-label="Matchup visualizer type">
             {(["good_matchup", "imbalanced"] as MatchupVisualizerView[]).map((option) => (
               <button
@@ -392,6 +373,21 @@ export function MatchupVisualizerPage() {
                 onClick={() => setView(option)}
               >
                 {option === "good_matchup" ? "Good Matchup" : "Imbalanced"}
+              </button>
+            ))}
+          </div>
+
+          <div className="matchup-visualizer-toggle" role="tablist" aria-label="Matchup visualizer perspective">
+            {(["offense", "defense"] as MatchupVisualizerPerspective[]).map((option) => (
+              <button
+                key={option}
+                type="button"
+                role="tab"
+                aria-selected={perspective === option}
+                className={`matchup-visualizer-toggle-button${perspective === option ? " active" : ""}`}
+                onClick={() => setPerspective(option)}
+              >
+                {option === "offense" ? "Offense" : "Defense"}
               </button>
             ))}
           </div>
