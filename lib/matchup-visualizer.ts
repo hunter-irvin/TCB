@@ -18,6 +18,7 @@ export type MatchupVisualizerEdge = {
   sourcePlayerId: number;
   targetPlayerId: number;
   count: number;
+  voteTotal: number;
   tone: MatchupVisualizerEdgeTone;
 };
 
@@ -30,6 +31,7 @@ export type MatchupVisualizerResponse = {
   edges: MatchupVisualizerEdge[];
   maxCount: number;
   totalConnections: number;
+  totalVotes: number;
 };
 
 export type MatchupVisualizerDatasetCollection = {
@@ -137,7 +139,8 @@ function createMatchupVisualizerResponse(
     matrix,
     edges,
     maxCount,
-    totalConnections: edges.length
+    totalConnections: edges.length,
+    totalVotes: edges.reduce((sum, edge) => sum + edge.voteTotal, 0)
   };
 }
 
@@ -212,6 +215,7 @@ export function buildMatchupVisualizerResponse(
         sourcePlayerId: aggregate.sourcePlayerId,
         targetPlayerId: aggregate.targetPlayerId,
         count: aggregate.goodCount,
+        voteTotal: aggregate.goodCount,
         tone: "neutral"
       });
       continue;
@@ -226,6 +230,7 @@ export function buildMatchupVisualizerResponse(
       sourcePlayerId: aggregate.sourcePlayerId,
       targetPlayerId: aggregate.targetPlayerId,
       count: Math.abs(netCount),
+      voteTotal: aggregate.positiveCount + aggregate.negativeCount,
       tone: netCount > 0 ? "positive" : "negative"
     });
   }

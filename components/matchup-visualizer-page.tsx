@@ -348,12 +348,14 @@ export function MatchupVisualizerPage() {
     [minimumMatchups, selectedData]
   );
   const hasConnections = Boolean(filteredData && filteredData.totalConnections > 0);
-  const visibleConnectionCount = filteredData
+  const visibleVoteCount = filteredData
     ? selectedPlayerId !== null && filteredData.nodes.some((node) => node.id === selectedPlayerId)
-      ? filteredData.edges.filter((edge) => edge.sourcePlayerId === selectedPlayerId).length
-      : filteredData.totalConnections
+      ? filteredData.edges
+          .filter((edge) => edge.sourcePlayerId === selectedPlayerId)
+          .reduce((sum, edge) => sum + edge.voteTotal, 0)
+      : filteredData.totalVotes
     : 0;
-  const countLabel = view === "good_matchup" ? "Good Matchups:" : "Imbalanced Matchups:";
+  const countLabel = view === "good_matchup" ? "Good Matchup Votes:" : "Imbalanced Votes:";
   const countUnitLabel = minimumMatchups === 1 ? "vote" : "votes";
   const emptyStateTitle =
     view === "good_matchup" ? "No strong good-matchup links yet" : "No strong imbalanced links yet";
@@ -440,7 +442,7 @@ export function MatchupVisualizerPage() {
             <>
               <div className="matchup-visualizer-count-text" aria-live="polite">
                 <span className="matchup-visualizer-count-label">{countLabel}</span>
-                <strong>{visibleConnectionCount}</strong>
+                <strong>{visibleVoteCount}</strong>
               </div>
               <MatchupChordDiagram
                 data={filteredData}
