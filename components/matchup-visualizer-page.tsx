@@ -5,8 +5,12 @@ import { arc, scaleLinear } from "d3";
 import { AppShell } from "@/components/app-shell";
 import {
   abbreviateVisualizerName,
+  filterMatchupVisualizerResponse,
+  MATCHUP_VISUALIZER_MAX_COUNT,
+  MATCHUP_VISUALIZER_MIN_COUNT,
   type MatchupVisualizerPerspective,
-  type MatchupVisualizerResponse
+  type MatchupVisualizerResponse,
+  type MatchupVisualizerView
 } from "@/lib/matchup-visualizer";
 
 type MatchupVisualizerRequestState =
@@ -56,8 +60,14 @@ function MatchupChordDiagram({
 
   useEffect(() => {
     setHoveredPlayerId(null);
-    setPinnedPlayerId(null);
-  }, [data, perspective]);
+    setPinnedPlayerId((current) => {
+      if (current === null) {
+        return null;
+      }
+
+      return data.nodes.some((node) => node.id === current) ? current : null;
+    });
+  }, [data]);
 
   const groups = useMemo(() => {
     const count = data.nodes.length;
@@ -127,6 +137,7 @@ function MatchupChordDiagram({
           sourcePlayerId: edge.sourcePlayerId,
           targetPlayerId: edge.targetPlayerId,
           count: edge.count,
+          tone: edge.tone,
           path: createCurvedLinkPath(sourceGroup.angle, targetGroup.angle),
           strokeWidth: strokeWidthScale(edge.count)
         };
@@ -175,7 +186,7 @@ function MatchupChordDiagram({
         className="matchup-visualizer-chart"
         viewBox={`0 0 ${CHART_SIZE} ${CHART_HEIGHT}`}
         role="img"
-        aria-label={`${perspective === "offense" ? "Offense" : "Defense"} matchup chord diagram`}
+        aria-label={`${perspective === "offense" ? "Offense" : "Defense"} ${data.view === "good_matchup" ? "good matchup" : "imbalanced matchup"} chord diagram`}
         onClick={(event) => {
           if (event.target === event.currentTarget) {
             setPinnedPlayerId(null);
@@ -207,7 +218,7 @@ function MatchupChordDiagram({
               <path
                 key={link.key}
                 d={link.path}
-                className={`matchup-visualizer-link${relatedToHoveredPlayer ? " active" : " inactive"}`}
+                className={`matchup-visualizer-link matchup-visualizer-link-${link.tone}${relatedToHoveredPlayer ? " active" : " inactive"}`}
                 data-source-player-id={link.sourcePlayerId}
                 data-target-player-id={link.targetPlayerId}
                 strokeWidth={link.strokeWidth}
@@ -275,6 +286,8 @@ function MatchupChordDiagram({
 
 export function MatchupVisualizerPage() {
   const [perspective, setPerspective] = useState<MatchupVisualizerPerspective>("offense");
+  const [view, setView] = useState<MatchupVisualizerView>("good_matchup");
+  const [minimumMatchups, setMinimumMatchups] = useState(MATCHUP_VISUALIZER_MIN_COUNT);
   const [requestState, setRequestState] = useState<MatchupVisualizerRequestState>({
     status: "loading",
     error: null,
@@ -292,7 +305,11 @@ export function MatchupVisualizerPage() {
 
     async function load() {
       try {
-        const response = await fetch(`/api/matchup-visualizer/chord?perspective=${perspective}`, {
+        const searchParams = new URLSearchParams({
+          perspective,
+          view
+        });
+        const response = await fetch(`/api/matchup-visualizer/chord?${searchParams.toString()}`, {
           method: "GET",
           cache: "no-store",
           signal: controller.signal
@@ -324,19 +341,31 @@ export function MatchupVisualizerPage() {
     void load();
 
     return () => controller.abort();
-  }, [perspective]);
+  }, [perspective, view]);
 
-  const data = requestState.data;
   const readyData = requestState.status === "ready" ? requestState.data : null;
-  const hasConnections = Boolean(data && data.totalConnections > 0);
+  const filteredData = useMemo(
+    () => (readyData ? filterMatchupVisualizerResponse(readyData, minimumMatchups) : null),
+    [minimumMatchups, readyData]
+  );
+  const hasConnections = Boolean(filteredData && filteredData.totalConnections > 0);
+  const visibleConnectionCount = filteredData?.totalConnections ?? 0;
+  const countLabel = view === "good_matchup" ? "Good Matchups:" : "Imbalanced Matchups:";
+  const countUnitLabel = minimumMatchups === 1 ? "vote" : "votes";
+  const emptyStateTitle =
+    view === "good_matchup" ? "No strong good-matchup links yet" : "No strong imbalanced links yet";
+  const emptyStateDescription =
+    view === "good_matchup"
+      ? `This view only includes play responses marked good matchup with at least ${minimumMatchups} ${countUnitLabel}. Collect more matchup-tinder data or lower the filter to light up the network.`
+      : `This view only includes imbalanced play responses with a net margin of at least ${minimumMatchups} ${countUnitLabel}. Collect more matchup-tinder data or lower the filter to light up the network.`;
 
   return (
     <AppShell
       title="Matchup Visualizer"
-      copy="Explore play-mode good-matchup relationships across the current roster."
+      copy="Explore play-mode matchup relationships across the current roster."
     >
       <div className="matchup-visualizer-page">
-        <div className="matchup-visualizer-toggle-block">
+        <div className="matchup-visualizer-controls">
           <div className="matchup-visualizer-toggle" role="tablist" aria-label="Matchup visualizer perspective">
             {(["offense", "defense"] as MatchupVisualizerPerspective[]).map((option) => (
               <button
@@ -351,6 +380,41 @@ export function MatchupVisualizerPage() {
               </button>
             ))}
           </div>
+
+          <div className="matchup-visualizer-toggle" role="tablist" aria-label="Matchup visualizer type">
+            {(["good_matchup", "imbalanced"] as MatchupVisualizerView[]).map((option) => (
+              <button
+                key={option}
+                type="button"
+                role="tab"
+                aria-selected={view === option}
+                className={`matchup-visualizer-toggle-button${view === option ? " active" : ""}`}
+                onClick={() => setView(option)}
+              >
+                {option === "good_matchup" ? "Good Matchup" : "Imbalanced"}
+              </button>
+            ))}
+          </div>
+
+          <label className="matchup-visualizer-filter" htmlFor="matchup-visualizer-min-good-matchups">
+            <span className="matchup-visualizer-filter-endpoint" aria-hidden="true">
+              {MATCHUP_VISUALIZER_MIN_COUNT}
+            </span>
+            <input
+              id="matchup-visualizer-min-good-matchups"
+              className="matchup-visualizer-filter-slider"
+              type="range"
+              min={MATCHUP_VISUALIZER_MIN_COUNT}
+              max={MATCHUP_VISUALIZER_MAX_COUNT}
+              step={1}
+              value={minimumMatchups}
+              aria-label={`Minimum ${view === "good_matchup" ? "good" : "imbalanced"} matchup threshold: ${minimumMatchups}`}
+              onChange={(event) => setMinimumMatchups(Number(event.target.value))}
+            />
+            <span className="matchup-visualizer-filter-endpoint" aria-hidden="true">
+              {MATCHUP_VISUALIZER_MAX_COUNT}
+            </span>
+          </label>
         </div>
 
         <section className="panel matchup-visualizer-shell">
@@ -364,17 +428,18 @@ export function MatchupVisualizerPage() {
               <h2>Unable to load the visualizer</h2>
               <p>{requestState.error}</p>
             </div>
-          ) : !hasConnections || !readyData ? (
+          ) : !hasConnections || !filteredData ? (
             <div className="matchup-visualizer-state-card">
-              <h2>No strong good-matchup links yet</h2>
-              <p>
-                This view only includes play responses marked good matchup with at least 1 vote.
-                Collect more matchup-tinder data to light up the network.
-              </p>
+              <h2>{emptyStateTitle}</h2>
+              <p>{emptyStateDescription}</p>
             </div>
           ) : (
             <>
-              <MatchupChordDiagram data={readyData} perspective={perspective} />
+              <div className="matchup-visualizer-count-text" aria-live="polite">
+                <span className="matchup-visualizer-count-label">{countLabel}</span>
+                <strong>{visibleConnectionCount}</strong>
+              </div>
+              <MatchupChordDiagram data={filteredData} perspective={perspective} />
             </>
           )}
         </section>

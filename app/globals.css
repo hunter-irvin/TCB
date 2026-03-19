@@ -2021,10 +2021,12 @@ select {
   gap: 14px;
 }
 
-.matchup-visualizer-toggle-block {
-  display: grid;
-  justify-items: center;
-  gap: 0;
+.matchup-visualizer-controls {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
 }
 
 .matchup-visualizer-toggle {
@@ -2061,6 +2063,49 @@ select {
   background: rgba(248, 245, 234, 0.96);
   color: #142114;
   box-shadow: 0 10px 22px rgba(0, 0, 0, 0.16);
+}
+
+.matchup-visualizer-count-label {
+  color: rgba(248, 245, 234, 0.72);
+}
+
+.matchup-visualizer-count-text {
+  display: inline-flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 8px;
+  color: rgba(248, 245, 234, 0.92);
+  font-size: 1rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.matchup-visualizer-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: min(100%, 260px);
+  min-height: 56px;
+  padding: 0 16px;
+  border-radius: 999px;
+  background: rgba(255, 248, 227, 0.08);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 14px 28px rgba(0, 0, 0, 0.14);
+}
+
+.matchup-visualizer-filter-slider {
+  flex: 1 1 auto;
+  min-width: 0;
+  accent-color: #f4c04f;
+  cursor: pointer;
+}
+
+.matchup-visualizer-filter-endpoint {
+  color: rgba(248, 245, 234, 0.68);
+  font-size: 0.88rem;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .matchup-visualizer-shell {
@@ -2116,10 +2161,21 @@ select {
 
 .matchup-visualizer-link {
   fill: none;
-  stroke: rgba(246, 212, 109, 0.92);
   stroke-linecap: round;
   pointer-events: none;
   transition: opacity 90ms ease, stroke 90ms ease;
+}
+
+.matchup-visualizer-link-neutral {
+  stroke: rgba(246, 212, 109, 0.92);
+}
+
+.matchup-visualizer-link-positive {
+  stroke: rgba(94, 214, 139, 0.94);
+}
+
+.matchup-visualizer-link-negative {
+  stroke: rgba(238, 95, 95, 0.94);
 }
 
 .matchup-visualizer-link.active {
@@ -2510,6 +2566,15 @@ select {
 
   .matchup-visualizer-shell {
     padding: 16px;
+  }
+
+  .matchup-visualizer-controls {
+    align-items: stretch;
+  }
+
+  .matchup-visualizer-toggle,
+  .matchup-visualizer-filter {
+    width: 100%;
   }
 
   .matchup-visualizer-state-card {

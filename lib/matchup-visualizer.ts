@@ -1,7 +1,12 @@
 export const MATCHUP_VISUALIZER_PERSPECTIVES = ["offense", "defense"] as const;
+export const MATCHUP_VISUALIZER_VIEWS = ["good_matchup", "imbalanced"] as const;
 export const MATCHUP_VISUALIZER_MIN_COUNT = 1;
+export const MATCHUP_VISUALIZER_MAX_COUNT = 5;
 
 export type MatchupVisualizerPerspective = (typeof MATCHUP_VISUALIZER_PERSPECTIVES)[number];
+export type MatchupVisualizerView = (typeof MATCHUP_VISUALIZER_VIEWS)[number];
+export type MatchupVisualizerEdgeTone = "neutral" | "positive" | "negative";
+export type MatchupVisualizerResult = "good_matchup" | "offense_wins" | "defense_wins";
 
 export type MatchupVisualizerNode = {
   id: number;
@@ -13,10 +18,12 @@ export type MatchupVisualizerEdge = {
   sourcePlayerId: number;
   targetPlayerId: number;
   count: number;
+  tone: MatchupVisualizerEdgeTone;
 };
 
 export type MatchupVisualizerResponse = {
   perspective: MatchupVisualizerPerspective;
+  view: MatchupVisualizerView;
   minCount: number;
   nodes: MatchupVisualizerNode[];
   matrix: number[][];
@@ -31,15 +38,28 @@ type PlayerRow = {
   name: string;
 };
 
-type MatchupVisualizerCountRow = {
+type MatchupVisualizerResponseRow = {
   offense_player_id: number;
   defense_player_id: number;
+  result: MatchupVisualizerResult;
+};
+
+type MatchupVisualizerPairAggregate = {
+  sourcePlayerId: number;
+  targetPlayerId: number;
+  goodCount: number;
+  positiveCount: number;
+  negativeCount: number;
 };
 
 export function isMatchupVisualizerPerspective(
   value: unknown
 ): value is MatchupVisualizerPerspective {
   return MATCHUP_VISUALIZER_PERSPECTIVES.includes(value as MatchupVisualizerPerspective);
+}
+
+export function isMatchupVisualizerView(value: unknown): value is MatchupVisualizerView {
+  return MATCHUP_VISUALIZER_VIEWS.includes(value as MatchupVisualizerView);
 }
 
 export function matchupVisualizerNodesFromRows(rows: PlayerRow[]): MatchupVisualizerNode[] {
@@ -70,15 +90,48 @@ export function abbreviateVisualizerName(name: string) {
   return `${firstNames} ${lastName.charAt(0)}.`;
 }
 
-export function buildMatchupVisualizerResponse(
+function createMatchupVisualizerResponse(
   players: MatchupVisualizerNode[],
-  rows: MatchupVisualizerCountRow[],
+  edges: MatchupVisualizerEdge[],
   perspective: MatchupVisualizerPerspective,
-  minCount: number = MATCHUP_VISUALIZER_MIN_COUNT
+  view: MatchupVisualizerView,
+  minCount: number
 ): MatchupVisualizerResponse {
   const indexByPlayerId = new Map(players.map((player, index) => [player.id, index] as const));
   const matrix = players.map(() => players.map(() => 0));
-  const countsByPair = new Map<string, number>();
+  let maxCount = 0;
+
+  for (const edge of edges) {
+    const sourceIndex = indexByPlayerId.get(edge.sourcePlayerId);
+    const targetIndex = indexByPlayerId.get(edge.targetPlayerId);
+
+    if (sourceIndex === undefined || targetIndex === undefined) {
+      continue;
+    }
+
+    matrix[sourceIndex]![targetIndex] = edge.count;
+    maxCount = Math.max(maxCount, edge.count);
+  }
+
+  return {
+    perspective,
+    view,
+    minCount,
+    nodes: players,
+    matrix,
+    edges,
+    maxCount,
+    totalConnections: edges.length
+  };
+}
+
+function buildPairAggregates(
+  players: MatchupVisualizerNode[],
+  rows: MatchupVisualizerResponseRow[],
+  perspective: MatchupVisualizerPerspective
+) {
+  const playerIds = new Set(players.map((player) => player.id));
+  const aggregatesByPair = new Map<string, MatchupVisualizerPairAggregate>();
 
   for (const row of rows) {
     const offensePlayerId = row.offense_player_id;
@@ -91,48 +144,88 @@ export function buildMatchupVisualizerResponse(
     const sourcePlayerId = perspective === "offense" ? offensePlayerId : defensePlayerId;
     const targetPlayerId = perspective === "offense" ? defensePlayerId : offensePlayerId;
 
-    if (!indexByPlayerId.has(sourcePlayerId) || !indexByPlayerId.has(targetPlayerId)) {
+    if (!playerIds.has(sourcePlayerId) || !playerIds.has(targetPlayerId)) {
       continue;
     }
 
     const key = `${sourcePlayerId}:${targetPlayerId}`;
-    countsByPair.set(key, (countsByPair.get(key) ?? 0) + 1);
-  }
-
-  const edges: MatchupVisualizerEdge[] = [];
-  let maxCount = 0;
-
-  for (const [key, count] of countsByPair.entries()) {
-    if (count < minCount) {
-      continue;
-    }
-
-    const [sourcePlayerIdText, targetPlayerIdText] = key.split(":");
-    const sourcePlayerId = Number(sourcePlayerIdText);
-    const targetPlayerId = Number(targetPlayerIdText);
-    const sourceIndex = indexByPlayerId.get(sourcePlayerId);
-    const targetIndex = indexByPlayerId.get(targetPlayerId);
-
-    if (sourceIndex === undefined || targetIndex === undefined) {
-      continue;
-    }
-
-    matrix[sourceIndex]![targetIndex] = count;
-    maxCount = Math.max(maxCount, count);
-    edges.push({
+    const aggregate = aggregatesByPair.get(key) ?? {
       sourcePlayerId,
       targetPlayerId,
-      count
+      goodCount: 0,
+      positiveCount: 0,
+      negativeCount: 0
+    };
+
+    if (row.result === "good_matchup") {
+      aggregate.goodCount += 1;
+    } else {
+      const isPositiveResult =
+        perspective === "offense" ? row.result === "offense_wins" : row.result === "defense_wins";
+
+      if (isPositiveResult) {
+        aggregate.positiveCount += 1;
+      } else {
+        aggregate.negativeCount += 1;
+      }
+    }
+
+    aggregatesByPair.set(key, aggregate);
+  }
+
+  return [...aggregatesByPair.values()];
+}
+
+export function buildMatchupVisualizerResponse(
+  players: MatchupVisualizerNode[],
+  rows: MatchupVisualizerResponseRow[],
+  perspective: MatchupVisualizerPerspective,
+  view: MatchupVisualizerView,
+  minCount: number = MATCHUP_VISUALIZER_MIN_COUNT
+): MatchupVisualizerResponse {
+  const pairAggregates = buildPairAggregates(players, rows, perspective);
+  const edges: MatchupVisualizerEdge[] = [];
+
+  for (const aggregate of pairAggregates) {
+    if (view === "good_matchup") {
+      if (aggregate.goodCount < minCount) {
+        continue;
+      }
+
+      edges.push({
+        sourcePlayerId: aggregate.sourcePlayerId,
+        targetPlayerId: aggregate.targetPlayerId,
+        count: aggregate.goodCount,
+        tone: "neutral"
+      });
+      continue;
+    }
+
+    const netCount = aggregate.positiveCount - aggregate.negativeCount;
+    if (Math.abs(netCount) < minCount || netCount === 0) {
+      continue;
+    }
+
+    edges.push({
+      sourcePlayerId: aggregate.sourcePlayerId,
+      targetPlayerId: aggregate.targetPlayerId,
+      count: Math.abs(netCount),
+      tone: netCount > 0 ? "positive" : "negative"
     });
   }
 
-  return {
-    perspective,
-    minCount,
-    nodes: players,
-    matrix,
-    edges,
-    maxCount,
-    totalConnections: edges.length
-  };
+  return createMatchupVisualizerResponse(players, edges, perspective, view, minCount);
+}
+
+export function filterMatchupVisualizerResponse(
+  data: MatchupVisualizerResponse,
+  minCount: number
+): MatchupVisualizerResponse {
+  return createMatchupVisualizerResponse(
+    data.nodes,
+    data.edges.filter((edge) => edge.count >= minCount),
+    data.perspective,
+    data.view,
+    minCount
+  );
 }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   buildMatchupVisualizerResponse,
   isMatchupVisualizerPerspective,
+  isMatchupVisualizerView,
   MATCHUP_VISUALIZER_MIN_COUNT,
   matchupVisualizerNodesFromRows
 } from "@/lib/matchup-visualizer";
@@ -9,7 +10,7 @@ import { hasSupabasePublicConfig } from "@/lib/supabase/config";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 const PLAYER_SELECT_COLUMNS = "id,row_number,name";
-const RESPONSE_SELECT_COLUMNS = "offense_player_id,defense_player_id";
+const RESPONSE_SELECT_COLUMNS = "offense_player_id,defense_player_id,result";
 
 export async function GET(request: NextRequest) {
   if (!hasSupabasePublicConfig()) {
@@ -24,6 +25,11 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Invalid visualizer perspective." }, { status: 400 });
   }
 
+  const viewParam = request.nextUrl.searchParams.get("view") ?? "good_matchup";
+  if (!isMatchupVisualizerView(viewParam)) {
+    return NextResponse.json({ error: "Invalid visualizer view." }, { status: 400 });
+  }
+
   const supabase = getSupabaseServerClient();
 
   const [{ data: playerRows, error: playerError }, { data: responseRows, error: responseError }] =
@@ -32,7 +38,6 @@ export async function GET(request: NextRequest) {
       supabase
         .from("matchup_tinder_responses")
         .select(RESPONSE_SELECT_COLUMNS)
-        .eq("result", "good_matchup")
         .eq("mode", "play")
     ]);
 
@@ -49,6 +54,7 @@ export async function GET(request: NextRequest) {
     nodes,
     responseRows ?? [],
     perspectiveParam,
+    viewParam,
     MATCHUP_VISUALIZER_MIN_COUNT
   );
 
