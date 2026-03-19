@@ -50,25 +50,27 @@ function createCurvedLinkPath(sourceAngle: number, targetAngle: number) {
 
 function MatchupChordDiagram({
   data,
-  perspective
+  perspective,
+  selectedPlayerId,
+  onSelectedPlayerChange
 }: {
   data: MatchupVisualizerResponse;
   perspective: MatchupVisualizerPerspective;
+  selectedPlayerId: number | null;
+  onSelectedPlayerChange: (playerId: number | null) => void;
 }) {
   const [hoveredPlayerId, setHoveredPlayerId] = useState<number | null>(null);
-  const [pinnedPlayerId, setPinnedPlayerId] = useState<number | null>(null);
   const arcGenerator = useMemo(() => arc().innerRadius(INNER_RADIUS).outerRadius(OUTER_RADIUS), []);
 
   useEffect(() => {
     setHoveredPlayerId(null);
-    setPinnedPlayerId((current) => {
-      if (current === null) {
-        return null;
-      }
-
-      return data.nodes.some((node) => node.id === current) ? current : null;
-    });
-  }, [data]);
+    if (
+      selectedPlayerId !== null &&
+      !data.nodes.some((node) => node.id === selectedPlayerId)
+    ) {
+      onSelectedPlayerChange(null);
+    }
+  }, [data, onSelectedPlayerChange, selectedPlayerId]);
 
   const groups = useMemo(() => {
     const count = data.nodes.length;
@@ -143,7 +145,7 @@ function MatchupChordDiagram({
       .filter((link: any): link is NonNullable<typeof link> => Boolean(link));
   }, [data.edges, groupByPlayerId, strokeWidthScale]);
 
-  const activePlayerId = pinnedPlayerId ?? hoveredPlayerId;
+  const activePlayerId = selectedPlayerId ?? hoveredPlayerId;
   const activeTargetIds = useMemo(() => {
     if (activePlayerId === null) {
       return new Set<number>();
@@ -157,13 +159,13 @@ function MatchupChordDiagram({
   }, [activePlayerId, links]);
 
   const clearHoveredPlayer = () => {
-    if (pinnedPlayerId === null) {
+    if (selectedPlayerId === null) {
       setHoveredPlayerId(null);
     }
   };
 
   const handleLabelPointerEnter = (playerId: number) => {
-    if (pinnedPlayerId === null) {
+    if (selectedPlayerId === null) {
       setHoveredPlayerId(playerId);
     }
   };
@@ -174,7 +176,7 @@ function MatchupChordDiagram({
   };
 
   const togglePinnedPlayer = (playerId: number) => {
-    setPinnedPlayerId((current) => (current === playerId ? null : playerId));
+    onSelectedPlayerChange(selectedPlayerId === playerId ? null : playerId);
     setHoveredPlayerId(null);
   };
 
@@ -187,7 +189,7 @@ function MatchupChordDiagram({
         aria-label={`${perspective === "offense" ? "Offense" : "Defense"} ${data.view === "good_matchup" ? "good matchup" : "imbalanced matchup"} chord diagram`}
         onClick={(event) => {
           if (event.target === event.currentTarget) {
-            setPinnedPlayerId(null);
+            onSelectedPlayerChange(null);
             setHoveredPlayerId(null);
           }
         }}
@@ -239,7 +241,7 @@ function MatchupChordDiagram({
               <path
                 key={group.node.id}
                 d={group.path}
-                className={`matchup-visualizer-node-arc${isFocused ? " active" : ""}${isRelated ? " related" : ""}${pinnedPlayerId === wedgePlayerId ? " pinned" : ""}`}
+                className={`matchup-visualizer-node-arc${isFocused ? " active" : ""}${isRelated ? " related" : ""}${selectedPlayerId === wedgePlayerId ? " pinned" : ""}`}
                 data-player-id={wedgePlayerId}
                 style={{
                   opacity: isVisible ? 1 : 0.18
@@ -261,7 +263,7 @@ function MatchupChordDiagram({
             return (
               <g key={group.node.id}>
                 <text
-                  className={`matchup-visualizer-label${isFocused ? " active" : ""}${isRelated ? " related" : ""}${pinnedPlayerId === group.node.id ? " pinned" : ""}`}
+                  className={`matchup-visualizer-label${isFocused ? " active" : ""}${isRelated ? " related" : ""}${selectedPlayerId === group.node.id ? " pinned" : ""}`}
                   data-player-id={group.node.id}
                   x={CHART_CENTER_X + group.labelPoint.x}
                   y={CHART_CENTER_Y + group.labelPoint.y}
@@ -287,6 +289,7 @@ export function MatchupVisualizerPage() {
   const [perspective, setPerspective] = useState<MatchupVisualizerPerspective>("offense");
   const [view, setView] = useState<MatchupVisualizerView>("good_matchup");
   const [minimumMatchups, setMinimumMatchups] = useState(MATCHUP_VISUALIZER_MIN_COUNT);
+  const [selectedPlayerId, setSelectedPlayerId] = useState<number | null>(null);
   const [requestState, setRequestState] = useState<MatchupVisualizerRequestState>({
     status: "loading",
     error: null,
@@ -345,7 +348,11 @@ export function MatchupVisualizerPage() {
     [minimumMatchups, selectedData]
   );
   const hasConnections = Boolean(filteredData && filteredData.totalConnections > 0);
-  const visibleConnectionCount = filteredData?.totalConnections ?? 0;
+  const visibleConnectionCount = filteredData
+    ? selectedPlayerId !== null && filteredData.nodes.some((node) => node.id === selectedPlayerId)
+      ? filteredData.edges.filter((edge) => edge.sourcePlayerId === selectedPlayerId).length
+      : filteredData.totalConnections
+    : 0;
   const countLabel = view === "good_matchup" ? "Good Matchups:" : "Imbalanced Matchups:";
   const countUnitLabel = minimumMatchups === 1 ? "vote" : "votes";
   const emptyStateTitle =
@@ -435,7 +442,12 @@ export function MatchupVisualizerPage() {
                 <span className="matchup-visualizer-count-label">{countLabel}</span>
                 <strong>{visibleConnectionCount}</strong>
               </div>
-              <MatchupChordDiagram data={filteredData} perspective={perspective} />
+              <MatchupChordDiagram
+                data={filteredData}
+                perspective={perspective}
+                selectedPlayerId={selectedPlayerId}
+                onSelectedPlayerChange={setSelectedPlayerId}
+              />
             </>
           )}
         </section>
