@@ -35,10 +35,17 @@ export function AppShell({
   return (
     <main className={["shell", shellClassName].filter(Boolean).join(" ")}>
       <div className={["page-frame", frameClassName].filter(Boolean).join(" ")}>
-        <header className={["page-header", headerClassName].filter(Boolean).join(" ")}>
+        <header
+          className={[
+            "page-header",
+            copy ? "with-copy" : "no-copy",
+            headerClassName
+          ]
+            .filter(Boolean)
+            .join(" ")}
+        >
           <div>
             <h1 className="page-title">{title}</h1>
-            {copy ? <div className="page-copy">{copy}</div> : null}
           </div>
           {headerActions || showNav ? (
             <div className="page-header-side">
@@ -58,6 +65,7 @@ export function AppShell({
             </div>
           ) : null}
         </header>
+        {copy ? <div className="page-copy page-copy-block">{copy}</div> : null}
         {children}
       </div>
     </main>

@@ -32,6 +32,7 @@ export type Team = {
   id: string;
   name: string;
   color: string;
+  displayOrder: number;
 };
 
 export type Assignments = Record<string, Record<Position, number | null>>;
@@ -57,4 +58,5 @@ export type Scenario = {
 export type PersistedScenarioState = {
   nextScenarioNumber: number;
   scenarios: Scenario[];
+  teams: Team[];
 };

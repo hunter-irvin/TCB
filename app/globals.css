@@ -68,7 +68,7 @@ select {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 28px;
+  margin-bottom: 12px;
 }
 
 .page-header-side {
@@ -86,9 +86,16 @@ select {
 }
 
 .page-copy {
-  margin: 6px 0 0;
   color: var(--muted);
   max-width: 680px;
+}
+
+.page-copy-block {
+  margin: 0 0 28px;
+}
+
+.page-header.no-copy {
+  margin-bottom: 28px;
 }
 
 .matchup-tinder-header-copy {
@@ -868,9 +875,171 @@ select {
   cursor: grabbing;
 }
 
-.teams-grid {
+.status-chip.error[role="status"] {
+  cursor: default;
+}
+
+.team-config-shell {
+  display: grid;
+  gap: 18px;
+  padding: 20px;
+}
+
+.team-config-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.team-config-title {
+  margin: 0;
+  font-size: 1.08rem;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.team-config-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  align-items: stretch;
+}
+
+.team-config-card {
+  display: grid;
+  gap: 12px;
+  width: 100%;
+  padding: 14px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.team-config-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.team-config-index {
+  color: var(--text);
+  font-size: 0.88rem;
+  font-weight: 800;
+}
+
+.team-config-name-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.team-config-name-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: rgba(9, 42, 20, 0.5);
+  color: var(--text);
+}
+
+.team-config-name-input.invalid {
+  border-color: rgba(214, 80, 80, 0.78);
+  box-shadow: 0 0 0 1px rgba(214, 80, 80, 0.2);
+}
+
+.team-config-name-input:focus,
+.team-config-color-input:focus-visible,
+.team-config-add-button:focus-visible,
+.team-config-remove-button:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.76);
+  outline-offset: 3px;
+}
+
+.team-config-color-row {
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+  cursor: pointer;
+}
+
+.team-config-color-input {
+  width: 52px;
+  min-width: 52px;
+  height: 42px;
+  border: 0;
+  border-radius: 12px;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.team-config-add-slot {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+}
+
+.team-config-add-slot .team-config-add-button {
+  width: 100%;
+  min-height: 100%;
+  min-height: 134px;
+  border: 1px dashed rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+}
+
+.team-config-error {
+  color: #ffd8cf;
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.team-config-add-button,
+.team-config-remove-button {
+  border: 0;
+  border-radius: 999px;
+  padding: 10px 16px;
+  font-weight: 800;
+  cursor: pointer;
+  transition: transform 140ms ease, box-shadow 140ms ease, opacity 140ms ease;
+}
+
+.team-config-add-button {
+  background: var(--tab-on);
+  color: var(--tab-on-text);
+  box-shadow: 0 12px 24px rgba(246, 212, 109, 0.24);
+}
+
+.team-config-remove-button {
+  background: rgba(255, 255, 255, 0.94);
+  color: #171c18;
+  box-shadow: 0 10px 20px rgba(0, 0, 0, 0.12);
+}
+
+.team-config-add-button:hover:not(:disabled),
+.team-config-remove-button:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+.team-config-add-slot .team-config-add-button:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.34);
+}
+
+.team-config-add-button:disabled,
+.team-config-remove-button:disabled {
+  opacity: 0.56;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.teams-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 16px;
 }
 
@@ -1223,7 +1392,7 @@ select {
 
 .scenario-chart-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(58px, 1fr));
   gap: 8px;
   align-items: end;
 }
@@ -2548,6 +2717,15 @@ select {
     flex-wrap: wrap;
   }
 
+  .team-config-header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .team-config-grid {
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  }
+
   .matchup-tinder-toggle {
     max-width: none;
   }
@@ -2560,6 +2738,14 @@ select {
 
   .teams-grid {
     grid-template-columns: 1fr;
+  }
+
+  .team-config-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .team-config-name-row {
+    align-items: stretch;
   }
 
   .tab {

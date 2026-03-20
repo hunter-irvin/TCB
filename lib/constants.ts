@@ -12,6 +12,14 @@ export const STORAGE_KEY = "tcb-app-state";
 export const SEED_VERSION = "2026-03-11-v1";
 export const MAX_PLAYER_CHEMISTRY_LINKS = 5;
 export const TEAM_CHEMISTRY_MAX_ABS = 20;
+export const MAX_TEAMS = 4;
+export const TEAM_COLOR_PALETTE = ["#f3b0aa", "#b7d8f6", "#f3df7d", "#dadada"] as const;
+export const LEGACY_TEAM_COLOR_BY_TOKEN: Record<string, string> = {
+  "var(--dawgs)": TEAM_COLOR_PALETTE[0],
+  "var(--rangers)": TEAM_COLOR_PALETTE[1],
+  "var(--jackets)": TEAM_COLOR_PALETTE[2],
+  "var(--enforcers)": TEAM_COLOR_PALETTE[3]
+};
 
 export const PLAYER_ATTRIBUTE_GROUPS: Array<{
   label: string;
@@ -318,8 +326,8 @@ export const DEFAULT_PLAYER_CHEMISTRY_BY_ROW: Partial<Record<number, PlayerChemi
 };
 
 export const TEAMS: Team[] = [
-  { id: "dawgs", name: "Dave's Dawgs", color: "var(--dawgs)" },
-  { id: "rangers", name: "Alon's Rangers", color: "var(--rangers)" },
-  { id: "jackets", name: "Juwan's Jackets", color: "var(--jackets)" },
-  { id: "enforcers", name: "Eric's Enforcers", color: "var(--enforcers)" }
+  { id: "dawgs", name: "Dave's Dawgs", color: TEAM_COLOR_PALETTE[0], displayOrder: 1 },
+  { id: "rangers", name: "Alon's Rangers", color: TEAM_COLOR_PALETTE[1], displayOrder: 2 },
+  { id: "jackets", name: "Juwan's Jackets", color: TEAM_COLOR_PALETTE[2], displayOrder: 3 },
+  { id: "enforcers", name: "Eric's Enforcers", color: TEAM_COLOR_PALETTE[3], displayOrder: 4 }
 ];

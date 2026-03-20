@@ -1,3 +1,4 @@
+import { LEGACY_TEAM_COLOR_BY_TOKEN, MAX_TEAMS, TEAM_COLOR_PALETTE, TEAMS } from "@/lib/constants";
 import { createEmptyAssignments, createEmptyPlayerChemistry, sanitizePlayers } from "@/lib/state";
 import type {
   Assignments,
@@ -6,7 +7,8 @@ import type {
   PlayerChemistryKind,
   Position,
   Scenario,
-  SlotDescriptor
+  SlotDescriptor,
+  Team
 } from "@/lib/types";
 
 type DbPlayerRow = {
@@ -36,6 +38,14 @@ export type DbPlayerInsertRow = Omit<DbPlayerRow, "id">;
 export const PLAYER_SELECT_COLUMNS =
   "id,row_number,name,eligible_positions,shooting,driving,assisting,man_defense,help_defense,shot_blocking,playmaking,rebounding,transition";
 export const PLAYER_CHEMISTRY_SELECT_COLUMNS = "source_player_id,target_player_id,kind";
+export const TEAM_SELECT_COLUMNS = "id,name,color,display_order";
+
+type DbTeamRow = {
+  id: string;
+  name: string;
+  color: string;
+  display_order: number;
+};
 
 type DbTeamScenarioRow = {
   id: string;
@@ -79,6 +89,59 @@ export function normalizeScenarioIds(scenarios: Scenario[]) {
     ...scenario,
     id: isUuid(scenario.id) ? scenario.id : createScenarioId()
   }));
+}
+
+function normalizeHexColor(color: string) {
+  const trimmed = color.trim().toLowerCase();
+
+  if (/^#[0-9a-f]{6}$/i.test(trimmed)) {
+    return trimmed;
+  }
+
+  if (/^#[0-9a-f]{3}$/i.test(trimmed)) {
+    const [red, green, blue] = trimmed.slice(1).split("");
+    return `#${red}${red}${green}${green}${blue}${blue}`;
+  }
+
+  return null;
+}
+
+export function normalizeTeamColor(
+  color: string | null | undefined,
+  fallbackColor: string = TEAM_COLOR_PALETTE[0]
+) {
+  const normalizedHex = normalizeHexColor(color ?? "");
+  if (normalizedHex) {
+    return normalizedHex;
+  }
+
+  const legacyColor = LEGACY_TEAM_COLOR_BY_TOKEN[(color ?? "").trim()];
+  if (legacyColor) {
+    return legacyColor;
+  }
+
+  return fallbackColor;
+}
+
+export function normalizeTeams(
+  teams: Team[],
+  fallbackTeams: Team[] = TEAMS
+): Team[] {
+  const fallbackById = new Map(fallbackTeams.map((team) => [team.id, team] as const));
+
+  return teams
+    .slice()
+    .sort((left, right) => (left.displayOrder ?? 0) - (right.displayOrder ?? 0))
+    .slice(0, MAX_TEAMS)
+    .map((team, index) => {
+      const fallbackTeam = fallbackById.get(team.id) ?? fallbackTeams[index] ?? TEAMS[index] ?? TEAMS[0];
+      return {
+        id: team.id,
+        name: team.name,
+        color: normalizeTeamColor(team.color, fallbackTeam.color),
+        displayOrder: index + 1
+      };
+    });
 }
 
 function normalizePositions(values: number[] | null | undefined): Position[] {
@@ -178,8 +241,44 @@ export function playersFromRows(
   );
 }
 
-export function buildAssignmentsFromRows(rows: DbScenarioAssignmentRow[]): Assignments {
-  const assignments = createEmptyAssignments();
+export function teamFromRow(row: DbTeamRow, fallbackTeam: Team): Team {
+  return {
+    id: row.id,
+    name: row.name,
+    color: normalizeTeamColor(row.color, fallbackTeam.color),
+    displayOrder: row.display_order
+  };
+}
+
+export function teamsFromRows(rows: DbTeamRow[], fallbackTeams: Team[] = TEAMS): Team[] {
+  if (rows.length === 0) {
+    return normalizeTeams(fallbackTeams, fallbackTeams);
+  }
+
+  return normalizeTeams(
+    rows
+      .slice()
+      .sort((left, right) => left.display_order - right.display_order)
+      .map((row, index) => teamFromRow(row, fallbackTeams[index] ?? TEAMS[index] ?? TEAMS[0])),
+    fallbackTeams
+  );
+}
+
+export function teamsToRows(teams: Team[]) {
+  return teams.map((team, index) => ({
+    id: team.id,
+    name: team.name,
+    color: normalizeTeamColor(team.color, TEAM_COLOR_PALETTE[index] ?? TEAM_COLOR_PALETTE[0]),
+    display_order: index + 1
+  }));
+}
+
+export function areTeamsEqual(left: Team[], right: Team[]) {
+  return JSON.stringify(teamsToRows(left)) === JSON.stringify(teamsToRows(right));
+}
+
+export function buildAssignmentsFromRows(rows: DbScenarioAssignmentRow[], teams: Team[] = TEAMS): Assignments {
+  const assignments = createEmptyAssignments(teams);
 
   for (const row of rows) {
     const position = row.position as Position;
@@ -196,7 +295,8 @@ export function buildAssignmentsFromRows(rows: DbScenarioAssignmentRow[]): Assig
 export function buildScenarioState(
   scenarios: DbTeamScenarioRow[],
   assignmentRows: DbScenarioAssignmentRow[],
-  localScenarios: Scenario[] = []
+  localScenarios: Scenario[] = [],
+  teams: Team[] = TEAMS
 ): Scenario[] {
   const collapsedById = new Map(localScenarios.map((scenario) => [scenario.id, scenario.collapsed]));
   const rowsByScenario = assignmentRows.reduce<Map<string, DbScenarioAssignmentRow[]>>((acc, row) => {
@@ -212,7 +312,7 @@ export function buildScenarioState(
     .map((scenario) => ({
       id: scenario.id,
       title: scenario.title,
-      assignments: buildAssignmentsFromRows(rowsByScenario.get(scenario.id) ?? []),
+      assignments: buildAssignmentsFromRows(rowsByScenario.get(scenario.id) ?? [], teams),
       collapsed: collapsedById.get(scenario.id) ?? false
     }));
 }
@@ -279,11 +379,11 @@ export function areScenariosEquivalent(left: Scenario[], right: Scenario[]) {
   );
 }
 
-export function isScenarioPristine(scenarios: Scenario[]) {
+export function isScenarioPristine(scenarios: Scenario[], teams: Team[] = TEAMS) {
   return (
     scenarios.length === 1 &&
     scenarios[0].title === "Team Scenario 1" &&
-    areAssignmentsEqual(scenarios[0].assignments, createEmptyAssignments())
+    areAssignmentsEqual(scenarios[0].assignments, createEmptyAssignments(teams))
   );
 }
 
@@ -307,9 +407,14 @@ export function parseStoredScenarioState(value: string | null): PersistedScenari
       return null;
     }
 
+    const storedTeams = Array.isArray(parsed.teams) && parsed.teams.length > 0
+      ? normalizeTeams(parsed.teams)
+      : normalizeTeams(TEAMS);
+
     return {
       nextScenarioNumber: parsed.nextScenarioNumber,
-      scenarios: normalizeScenarioIds(parsed.scenarios)
+      scenarios: normalizeScenarioIds(parsed.scenarios),
+      teams: storedTeams
     };
   } catch {
     return null;

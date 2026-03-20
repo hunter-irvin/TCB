@@ -17,6 +17,7 @@ import type {
   PlayerChemistry,
   PlayerChemistryKind,
   Position,
+  Team,
   SlotDescriptor
 } from "@/lib/types";
 
@@ -121,8 +122,8 @@ export function getDefaultPlayerChemistry(rowNumber: number): PlayerChemistry {
   };
 }
 
-export function createEmptyAssignments(): Assignments {
-  return TEAMS.reduce<Assignments>((teamAcc, team) => {
+export function createEmptyAssignments(teams: Team[] = TEAMS): Assignments {
+  return teams.reduce<Assignments>((teamAcc, team) => {
     const slots = POSITIONS.reduce<Record<Position, number | null>>((posAcc, position) => {
       posAcc[position] = null;
       return posAcc;
