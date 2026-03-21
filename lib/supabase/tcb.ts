@@ -13,6 +13,7 @@ import type {
 
 type DbPlayerRow = {
   id: number;
+  run_id?: string;
   row_number: number;
   name: string;
   eligible_positions: number[] | null;
@@ -28,6 +29,7 @@ type DbPlayerRow = {
 };
 
 export type DbPlayerChemistryRow = {
+  run_id?: string;
   source_player_id: number;
   target_player_id: number;
   kind: PlayerChemistryKind;
@@ -36,12 +38,14 @@ export type DbPlayerChemistryRow = {
 export type DbPlayerInsertRow = Omit<DbPlayerRow, "id">;
 
 export const PLAYER_SELECT_COLUMNS =
-  "id,row_number,name,eligible_positions,shooting,driving,assisting,man_defense,help_defense,shot_blocking,playmaking,rebounding,transition";
-export const PLAYER_CHEMISTRY_SELECT_COLUMNS = "source_player_id,target_player_id,kind";
-export const TEAM_SELECT_COLUMNS = "id,name,color,display_order";
+  "id,run_id,row_number,name,eligible_positions,shooting,driving,assisting,man_defense,help_defense,shot_blocking,playmaking,rebounding,transition";
+export const PLAYER_CHEMISTRY_SELECT_COLUMNS = "run_id,source_player_id,target_player_id,kind";
+export const TEAM_SELECT_COLUMNS = "id,run_id,name,color,display_order";
+export const TEAM_SCENARIO_SELECT_COLUMNS = "id,run_id,title,sort_order";
 
 type DbTeamRow = {
   id: string;
+  run_id?: string;
   name: string;
   color: string;
   display_order: number;
@@ -49,6 +53,7 @@ type DbTeamRow = {
 
 type DbTeamScenarioRow = {
   id: string;
+  run_id?: string;
   title: string;
   sort_order: number;
 };
@@ -174,15 +179,16 @@ export function playerFromRow(
   };
 }
 
-export function playerToRow(player: Player): DbPlayerRow {
+export function playerToRow(player: Player, runId: string): DbPlayerRow {
   return {
     id: player.id,
-    ...playerToInsertRow(player)
+    ...playerToInsertRow(player, runId)
   };
 }
 
-export function playerToInsertRow(player: Player): DbPlayerInsertRow {
+export function playerToInsertRow(player: Player, runId: string): DbPlayerInsertRow {
   return {
+    run_id: runId,
     row_number: player.rowNumber,
     name: player.name,
     eligible_positions: player.positions,
@@ -198,7 +204,7 @@ export function playerToInsertRow(player: Player): DbPlayerInsertRow {
   };
 }
 
-export function playerChemistryRowsFromPlayers(players: Player[]): DbPlayerChemistryRow[] {
+export function playerChemistryRowsFromPlayers(players: Player[], runId: string): DbPlayerChemistryRow[] {
   return players
     .filter((player) => player.id > 0)
     .flatMap((player) =>
@@ -207,6 +213,7 @@ export function playerChemistryRowsFromPlayers(players: Player[]): DbPlayerChemi
           chemistryPlayerIds
             .filter((targetPlayerId) => targetPlayerId > 0)
             .map((targetPlayerId) => ({
+              run_id: runId,
               source_player_id: player.id,
               target_player_id: targetPlayerId,
               kind
@@ -252,7 +259,7 @@ export function teamFromRow(row: DbTeamRow, fallbackTeam: Team): Team {
 
 export function teamsFromRows(rows: DbTeamRow[], fallbackTeams: Team[] = TEAMS): Team[] {
   if (rows.length === 0) {
-    return normalizeTeams(fallbackTeams, fallbackTeams);
+    return [];
   }
 
   return normalizeTeams(
@@ -264,7 +271,17 @@ export function teamsFromRows(rows: DbTeamRow[], fallbackTeams: Team[] = TEAMS):
   );
 }
 
-export function teamsToRows(teams: Team[]) {
+export function teamsToRows(teams: Team[], runId: string) {
+  return teams.map((team, index) => ({
+    id: team.id,
+    run_id: runId,
+    name: team.name,
+    color: normalizeTeamColor(team.color, TEAM_COLOR_PALETTE[index] ?? TEAM_COLOR_PALETTE[0]),
+    display_order: index + 1
+  }));
+}
+
+function serializeTeams(teams: Team[]) {
   return teams.map((team, index) => ({
     id: team.id,
     name: team.name,
@@ -274,7 +291,7 @@ export function teamsToRows(teams: Team[]) {
 }
 
 export function areTeamsEqual(left: Team[], right: Team[]) {
-  return JSON.stringify(teamsToRows(left)) === JSON.stringify(teamsToRows(right));
+  return JSON.stringify(serializeTeams(left)) === JSON.stringify(serializeTeams(right));
 }
 
 export function buildAssignmentsFromRows(rows: DbScenarioAssignmentRow[], teams: Team[] = TEAMS): Assignments {
@@ -331,9 +348,10 @@ export function scenarioAssignmentsToRows(scenarioId: string, assignments: Assig
   );
 }
 
-export function scenariosToRows(scenarios: Scenario[]) {
+export function scenariosToRows(scenarios: Scenario[], runId: string) {
   return scenarios.map((scenario, index) => ({
     id: scenario.id,
+    run_id: runId,
     title: scenario.title,
     sort_order: index + 1
   }));

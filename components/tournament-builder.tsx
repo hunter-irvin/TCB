@@ -1,6 +1,10 @@
 "use client";
 
 import {
+  DEFAULT_RUN_SLUG,
+  buildRunScopedStorageKey
+} from "@/lib/runs";
+import {
   createContext,
   useCallback,
   useContext,
@@ -24,6 +28,7 @@ import {
   remapPlayersById,
   sanitizePlayers
 } from "@/lib/state";
+import { useRun } from "@/components/run-provider";
 import { getSupabaseBrowserClient, hasSupabaseBrowserConfig } from "@/lib/supabase/browser";
 import {
   PLAYER_CHEMISTRY_SELECT_COLUMNS,
@@ -80,12 +85,16 @@ function canAssignPlayerToSlot(players: Player[], playerId: number, slot: SlotDe
   return Boolean(player && player.positions.includes(slot.position) && player.name.trim());
 }
 
-async function fetchSupabasePlayers() {
+async function fetchSupabasePlayers(runId: string) {
   const supabase = getSupabaseBrowserClient();
   const [{ data: playerRows, error: playerError }, { data: chemistryRows, error: chemistryError }] =
     await Promise.all([
-      supabase.from("players").select(PLAYER_SELECT_COLUMNS).order("row_number", { ascending: true }),
-      supabase.from("player_chemistry").select(PLAYER_CHEMISTRY_SELECT_COLUMNS)
+      supabase
+        .from("players")
+        .select(PLAYER_SELECT_COLUMNS)
+        .eq("run_id", runId)
+        .order("row_number", { ascending: true }),
+      supabase.from("player_chemistry").select(PLAYER_CHEMISTRY_SELECT_COLUMNS).eq("run_id", runId)
     ]);
 
   if (playerError) {
@@ -106,7 +115,8 @@ type PushPlayersSnapshotResult = {
 
 async function pushPlayersSnapshot(
   players: Player[],
-  previousPlayers: Player[]
+  previousPlayers: Player[],
+  runId: string
 ): Promise<PushPlayersSnapshotResult> {
   const supabase = getSupabaseBrowserClient();
   const existingPlayers = players.filter((player) => player.id > 0);
@@ -119,7 +129,7 @@ async function pushPlayersSnapshot(
     .map((player) => player.id);
 
   if (existingPlayers.length > 0) {
-    const { error } = await supabase.from("players").upsert(existingPlayers.map(playerToRow), {
+    const { error } = await supabase.from("players").upsert(existingPlayers.map((player) => playerToRow(player, runId)), {
       onConflict: "id"
     });
 
@@ -133,7 +143,7 @@ async function pushPlayersSnapshot(
   if (draftPlayers.length > 0) {
     const { data, error } = await supabase
       .from("players")
-      .insert(draftPlayers.map(playerToInsertRow))
+      .insert(draftPlayers.map((player) => playerToInsertRow(player, runId)))
       .select(PLAYER_SELECT_COLUMNS);
 
     if (error) {
@@ -154,7 +164,7 @@ async function pushPlayersSnapshot(
   }
 
   if (deletedPlayerIds.length > 0) {
-    const { error } = await supabase.from("players").delete().in("id", deletedPlayerIds);
+    const { error } = await supabase.from("players").delete().eq("run_id", runId).in("id", deletedPlayerIds);
 
     if (error) {
       throw error;
@@ -168,6 +178,7 @@ async function pushPlayersSnapshot(
     const { error } = await supabase
       .from("player_chemistry")
       .delete()
+      .eq("run_id", runId)
       .in("source_player_id", chemistrySourcePlayerIds);
 
     if (error) {
@@ -175,7 +186,7 @@ async function pushPlayersSnapshot(
     }
   }
 
-  const chemistryRows = playerChemistryRowsFromPlayers(nextPlayers);
+  const chemistryRows = playerChemistryRowsFromPlayers(nextPlayers, runId);
   if (chemistryRows.length > 0) {
     const { error } = await supabase.from("player_chemistry").insert(chemistryRows);
 
@@ -191,6 +202,7 @@ async function pushPlayersSnapshot(
 }
 
 export function TournamentBuilderProvider({ children }: { children: ReactNode }) {
+  const { run } = useRun();
   const [loading, setLoading] = useState(true);
   const [state, setState] = useState<AppState | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
@@ -203,6 +215,11 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
   const refreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refreshInFlightRef = useRef(false);
   const refreshQueuedRef = useRef(false);
+  const storageKey = useMemo(() => buildRunScopedStorageKey(STORAGE_KEY, run.slug), [run.slug]);
+  const defaultPlayers = useMemo(
+    () => (run.slug === DEFAULT_RUN_SLUG ? createDefaultPlayers() : []),
+    [run.slug]
+  );
 
   useEffect(() => {
     latestStateRef.current = state;
@@ -253,7 +270,7 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
       pendingPlayerSyncRef.current = null;
 
       try {
-        const result = await pushPlayersSnapshot(nextSnapshot, lastSyncedPlayersRef.current);
+        const result = await pushPlayersSnapshot(nextSnapshot, lastSyncedPlayersRef.current, run.id);
         applyPlayerIdRemap(result.tempIdMap);
         lastSyncedPlayersRef.current = result.players;
         setSyncError(null);
@@ -267,7 +284,7 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
     }
 
     syncInFlightRef.current = false;
-  }, [applyPlayerIdRemap]);
+  }, [applyPlayerIdRemap, run.id]);
 
   const schedulePlayerSync = useCallback(
     (immediate = false) => {
@@ -314,7 +331,9 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
     let cancelled = false;
 
     async function loadState() {
-      const stored = window.localStorage.getItem(STORAGE_KEY);
+      const stored =
+        window.localStorage.getItem(storageKey) ??
+        (run.slug === DEFAULT_RUN_SLUG ? window.localStorage.getItem(STORAGE_KEY) : null);
       const localState = stored ? (JSON.parse(stored) as AppState) : null;
       const localPlayers = localState ? sanitizePlayers(localState.players) : null;
 
@@ -329,7 +348,7 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
       }
 
       if (!localState) {
-        const seeded = createInitialState(createDefaultPlayers());
+        const seeded = createInitialState(defaultPlayers);
         if (!cancelled) {
           setState(seeded);
           setLoading(false);
@@ -341,14 +360,15 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
       }
 
       try {
-        const seedPlayers = createDefaultPlayers();
-        const backendPlayers = await fetchSupabasePlayers();
+        const seedPlayers = defaultPlayers;
+        const backendPlayers = await fetchSupabasePlayers(run.id);
         if (cancelled) {
           return;
         }
 
         if (
           localPlayers &&
+          localPlayers.length > 0 &&
           (backendPlayers.length === 0 ||
             (arePlayersEqual(backendPlayers, seedPlayers) && !arePlayersEqual(localPlayers, seedPlayers)))
         ) {
@@ -385,15 +405,15 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
     return () => {
       cancelled = true;
     };
-  }, [syncPlayerRefFromSnapshot]);
+  }, [defaultPlayers, run.id, run.slug, storageKey, syncPlayerRefFromSnapshot]);
 
   useEffect(() => {
     if (!state) {
       return;
     }
 
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  }, [state]);
+    window.localStorage.setItem(storageKey, JSON.stringify(state));
+  }, [state, storageKey]);
 
   useEffect(() => {
     if (!hasSupabaseBrowserConfig()) {
@@ -461,7 +481,7 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
       refreshInFlightRef.current = true;
 
       try {
-        const backendPlayers = await fetchSupabasePlayers();
+        const backendPlayers = await fetchSupabasePlayers(run.id);
         if (!active) {
           return;
         }
@@ -517,7 +537,7 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
     };
 
     channel = supabase
-      .channel("tcb-players")
+      .channel(`tcb-players-${run.slug}`)
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "players" },
@@ -544,7 +564,7 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
         void supabase.removeChannel(channel);
       }
     };
-  }, [syncPlayerRefFromSnapshot]);
+  }, [run.id, run.slug, syncPlayerRefFromSnapshot]);
 
   const applyPlayerUpdate = useCallback(
     (updater: (players: Player[]) => Player[]) => {
@@ -717,7 +737,7 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
   const value = useMemo<BuilderContextValue>(
     () => ({
       loading,
-      players: state?.players ?? createDefaultPlayers(),
+      players: state?.players ?? defaultPlayers,
       assignments: state?.assignments ?? createEmptyAssignments(),
       syncError,
       retrySync,
@@ -738,6 +758,7 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
       deletePlayer,
       getEligibleForSlot,
       loading,
+      defaultPlayers,
       retrySync,
       state,
       syncError,

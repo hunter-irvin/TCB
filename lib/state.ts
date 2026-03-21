@@ -24,7 +24,7 @@ import type {
 export function createEmptyPlayerAttributes(): PlayerAttributes {
   return PLAYER_ATTRIBUTE_GROUPS.flatMap((group) => group.attributes).reduce<PlayerAttributes>(
     (attributes, attribute) => {
-      attributes[attribute.key] = null;
+      attributes[attribute.key] = 0;
       return attributes;
     },
     {} as PlayerAttributes
@@ -46,7 +46,9 @@ export function sanitizePlayerAttributes(
   for (const key of Object.keys(base) as PlayerAttributeKey[]) {
     const value = attributes?.[key];
     base[key] =
-      value === 1 || value === 2 || value === 3 || value === 4 || value === 5 ? value : null;
+      value === 0 || value === 1 || value === 2 || value === 3 || value === 4 || value === 5
+        ? value
+        : null;
   }
 
   return base;

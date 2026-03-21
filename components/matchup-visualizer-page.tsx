@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState, type MouseEvent } from "react";
 import { arc, scaleLinear } from "d3";
 import { AppShell } from "@/components/app-shell";
+import { useRun } from "@/components/run-provider";
 import {
   abbreviateVisualizerName,
   filterMatchupVisualizerResponse,
@@ -13,6 +14,7 @@ import {
   type MatchupVisualizerResponse,
   type MatchupVisualizerView
 } from "@/lib/matchup-visualizer";
+import { buildRunApiPath } from "@/lib/runs";
 
 type MatchupVisualizerRequestState =
   | { status: "loading"; error: null; data: null }
@@ -286,6 +288,7 @@ function MatchupChordDiagram({
 }
 
 export function MatchupVisualizerPage() {
+  const { run } = useRun();
   const [perspective, setPerspective] = useState<MatchupVisualizerPerspective>("offense");
   const [view, setView] = useState<MatchupVisualizerView>("good_matchup");
   const [minimumMatchups, setMinimumMatchups] = useState(MATCHUP_VISUALIZER_MIN_COUNT);
@@ -307,7 +310,7 @@ export function MatchupVisualizerPage() {
 
     async function load() {
       try {
-        const response = await fetch("/api/matchup-visualizer/chord", {
+        const response = await fetch(buildRunApiPath(run.slug, "matchup-visualizer/chord"), {
           method: "GET",
           cache: "no-store",
           signal: controller.signal
@@ -339,7 +342,7 @@ export function MatchupVisualizerPage() {
     void load();
 
     return () => controller.abort();
-  }, []);
+  }, [run.slug]);
 
   const readyBundle = requestState.status === "ready" ? requestState.data : null;
   const selectedData = readyBundle ? readyBundle.datasets[perspective][view] : null;

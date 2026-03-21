@@ -1,5 +1,14 @@
-import { MatchupVisualizerPage } from "@/components/matchup-visualizer-page";
+import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
+import {
+  ACTIVE_RUN_COOKIE_KEY,
+  buildRunPath,
+  getStoredRunSlugFromValue
+} from "@/lib/runs";
 
-export default function MatchupVisualizerRoute() {
-  return <MatchupVisualizerPage />;
+export default async function MatchupVisualizerRoute() {
+  const cookieStore = await cookies();
+  const runSlug = getStoredRunSlugFromValue(cookieStore.get(ACTIVE_RUN_COOKIE_KEY)?.value);
+
+  redirect(buildRunPath(runSlug, "matchup-visualizer"));
 }

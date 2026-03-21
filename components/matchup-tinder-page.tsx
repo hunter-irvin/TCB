@@ -2,11 +2,13 @@
 
 import { startTransition, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { AppShell } from "@/components/app-shell";
+import { useRun } from "@/components/run-provider";
 import type {
   MatchupTinderMatchup,
   MatchupTinderMode,
   MatchupTinderResult
 } from "@/lib/matchup-tinder";
+import { buildRunApiPath } from "@/lib/runs";
 
 type MatchupTinderNextResponse = {
   matchup?: MatchupTinderMatchup;
@@ -116,6 +118,7 @@ function createRoundView(matchup: MatchupTinderMatchup): MatchupTinderRoundView 
 }
 
 export function MatchupTinderPage() {
+  const { run } = useRun();
   const [mode, setMode] = useState<MatchupTinderMode>("test");
   const [currentRound, setCurrentRound] = useState<MatchupTinderRoundView | null>(null);
   const [status, setStatus] = useState<"loading" | "ready" | "resolving" | "error">("loading");
@@ -178,7 +181,7 @@ export function MatchupTinderPage() {
       params.append("exclude", key);
     }
 
-    const response = await fetch(`/api/matchup-tinder/next?${params.toString()}`, {
+    const response = await fetch(`${buildRunApiPath(run.slug, "matchup-tinder/next")}?${params.toString()}`, {
       method: "GET",
       cache: "no-store"
     });
@@ -189,7 +192,7 @@ export function MatchupTinderPage() {
     }
 
     return payload.matchup;
-  }, []);
+  }, [run.slug]);
 
   const requestNextMatchup = useCallback(
     async (nextMode: MatchupTinderMode, excludedKeys: Iterable<string>) => {
@@ -367,7 +370,7 @@ export function MatchupTinderPage() {
         throw new Error("Unable to record your selection.");
       }
 
-      const response = await fetch("/api/matchup-tinder/respond", {
+      const response = await fetch(buildRunApiPath(run.slug, "matchup-tinder/respond"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -403,7 +406,7 @@ export function MatchupTinderPage() {
         showReadyToPlayModal
       };
     },
-    [loadNextMatchup, matchup, mode, testCompletedRounds]
+    [loadNextMatchup, matchup, mode, run.slug, testCompletedRounds]
   );
 
   const handleKeepTesting = () => {
@@ -564,6 +567,7 @@ export function MatchupTinderPage() {
       title="Matchup Tinder"
       copy={null}
       showNav={false}
+      showRunSwitcher={false}
       headerActions={
         <button
           type="button"

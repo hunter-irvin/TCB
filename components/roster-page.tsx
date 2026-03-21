@@ -18,7 +18,7 @@ import type {
   Position
 } from "@/lib/types";
 
-const ATTRIBUTE_RATINGS: PlayerAttributeRating[] = [1, 2, 3, 4, 5];
+const ATTRIBUTE_RATINGS: PlayerAttributeRating[] = [0, 1, 2, 3, 4, 5];
 const CHEMISTRY_COLUMNS: Array<{
   key: "bonus";
   label: string;
