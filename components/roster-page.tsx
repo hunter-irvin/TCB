@@ -18,7 +18,7 @@ import type {
   Position
 } from "@/lib/types";
 
-const ATTRIBUTE_RATINGS: PlayerAttributeRating[] = [0, 1, 2, 3, 4, 5];
+const ATTRIBUTE_RATINGS: PlayerAttributeRating[] = [1, 2, 3, 4, 5];
 const CHEMISTRY_COLUMNS: Array<{
   key: "bonus";
   label: string;
@@ -29,15 +29,15 @@ const CHEMISTRY_COLUMNS: Array<{
 const ROSTER_MIN_WIDTHS = {
   rowNumber: 28,
   playerName: 150,
-  positions: 138,
-  attribute: 50,
+  positions: 118,
+  attribute: 76,
   chemistry: 84,
   actions: 44
 } as const;
 const ROSTER_EXTRA_WEIGHTS = {
   rowNumber: 0,
   playerName: 0.18,
-  positions: 0.24,
+  positions: 0,
   attribute: 1,
   chemistry: 0.72,
   actions: 0
@@ -270,16 +270,16 @@ function RosterContent() {
       title="Roster"
       copy="Edit names, eligible positions, and player ratings here."
     >
-      <div className="status-bar">
-        <div className="status-chip">
-          {loading ? "Loading roster seed..." : "Changes save in this browser automatically"}
+      {loading || syncError ? (
+        <div className="status-bar">
+          {loading ? <div className="status-chip">Loading roster seed...</div> : null}
+          {syncError ? (
+            <button type="button" className="status-chip error" onClick={retrySync}>
+              {syncError} Retry sync
+            </button>
+          ) : null}
         </div>
-        {syncError ? (
-          <button type="button" className="status-chip error" onClick={retrySync}>
-            {syncError} Retry sync
-          </button>
-        ) : null}
-      </div>
+      ) : null}
       <section className="panel table-shell">
         <div ref={wrapRef} className="roster-sheet-wrap">
           <table className="roster-sheet" style={{ width: `${columnWidths.tableWidth}px` }}>
@@ -536,7 +536,11 @@ function RosterRow({
         />
       </td>
       <td className="roster-positions-cell">
-        <div className="multi-select" role="group" aria-label={`Player ${rowNumber} positions`}>
+        <div
+          className="multi-select roster-positions-control"
+          role="group"
+          aria-label={`Player ${rowNumber} positions`}
+        >
           {POSITIONS.map((position) => {
             const active = positions.includes(position);
             return (

@@ -344,10 +344,10 @@ select {
 }
 
 .roster-sheet {
-  min-width: 766px;
+  min-width: 1110px;
   table-layout: fixed;
   border-collapse: separate;
-  border-spacing: 0 4px;
+  border-spacing: 0 1px;
 }
 
 .roster-group-spacer {
@@ -357,7 +357,7 @@ select {
 
 .roster-group-head,
 .roster-head-cell {
-  padding: 8px 5px;
+  padding: 2px;
   color: #1d231e;
   font-weight: 700;
   text-align: center;
@@ -367,7 +367,7 @@ select {
 }
 
 .roster-group-head {
-  border-radius: 10px 10px 0 0;
+  border-radius: 5px 5px 0 0;
   background: rgba(232, 229, 220, 0.92);
 }
 
@@ -423,13 +423,15 @@ select {
 }
 
 .roster-head-cell.row-number {
-  border-radius: 10px 0 0 10px;
+  border-radius: 0;
+  background: transparent;
   min-width: 28px;
 }
 
 .roster-head-cell.name {
   min-width: 150px;
   text-align: left;
+  border-radius: 5px 0 0 5px;
 }
 
 .roster-head-cell.name .roster-sort-button {
@@ -437,35 +439,48 @@ select {
 }
 
 .roster-head-cell.positions {
-  min-width: 138px;
+  min-width: 118px;
 }
 
 .roster-head-cell.attribute {
-  min-width: 50px;
+  min-width: 76px;
   font-size: 0.76rem;
+  overflow-wrap: normal;
+  word-break: normal;
+  hyphens: none;
+}
+
+.roster-head-cell.attribute .roster-sort-button {
+  overflow-wrap: normal;
+  word-break: normal;
+  hyphens: none;
 }
 
 .roster-head-cell.chemistry {
   min-width: 84px;
   font-size: 0.76rem;
+  border-radius: 0 5px 5px 0;
 }
 
 .roster-head-cell.actions {
-  border-radius: 0 10px 10px 0;
+  border-radius: 0;
+  background: transparent;
   min-width: 44px;
 }
 
 .roster-sheet tbody td {
   padding: 0;
   vertical-align: middle;
+  line-height: 0;
 }
 
 .roster-rownum,
 .roster-name,
-.roster-positions-cell,
-.roster-attribute-select {
-  min-height: 40px;
-  border-radius: 12px;
+.roster-positions-control,
+.roster-attribute-select,
+.roster-chemistry-button {
+  min-height: 32px;
+  border-radius: 5px;
   border: 1px solid var(--line);
   background: rgba(9, 42, 20, 0.48);
   color: var(--text);
@@ -474,7 +489,7 @@ select {
 .roster-rownum {
   font-weight: 700;
   color: var(--muted);
-  min-height: 40px;
+  min-height: 32px;
   padding: 0 5px;
   border: 0;
   border-radius: 0;
@@ -492,27 +507,30 @@ select {
 
 .roster-name {
   display: block;
-  width: calc(100% - 10px);
+  width: calc(100% - 4px);
   min-width: 0;
   max-width: none;
   margin: 0 auto;
-  padding: 2px 5px;
+  padding: 2px;
+  line-height: 1.2;
 }
 
 .roster-positions-cell {
   min-width: 0;
-  height: 40px;
+  height: 32px;
+  border: 0;
+  background: transparent;
 }
 
 .multi-select {
   display: flex;
   align-items: center;
   flex-wrap: nowrap;
-  gap: 4px;
-  width: calc(100% - 10px);
-  height: 40px;
+  gap: 2px;
+  width: 100%;
+  height: 32px;
   margin: 0 auto;
-  padding: 0 5px;
+  padding: 2px 5px;
 }
 
 .multi-pill {
@@ -521,14 +539,15 @@ select {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 30px;
-  padding: 0 5px;
+  min-height: 24px;
+  padding: 2px 5px;
   min-width: 0;
   background: rgba(255, 255, 255, 0.04);
   color: var(--text);
   cursor: pointer;
   white-space: nowrap;
   flex: 0 0 auto;
+  line-height: 1;
   transition: background 120ms ease, transform 120ms ease, border-color 120ms ease;
 }
 
@@ -544,13 +563,14 @@ select {
 
 .roster-attribute-select {
   display: block;
-  width: 40px;
-  min-width: 40px;
-  max-width: 40px;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
   margin: 0 auto;
-  padding: 2px 0;
+  padding: 2px;
   appearance: none;
   text-align: center;
+  line-height: 1.2;
 }
 
 .roster-chemistry-cell {
@@ -564,15 +584,11 @@ select {
 }
 
 .roster-chemistry-button {
-  width: 40px;
-  min-width: 40px;
-  min-height: 40px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 0;
-  background: rgba(9, 42, 20, 0.48);
-  color: var(--text);
+  width: calc(100% - 4px);
+  min-width: 0;
+  padding: 2px;
   font-weight: 700;
+  line-height: 1.2;
   cursor: pointer;
   transition:
     transform 120ms ease,
@@ -605,6 +621,7 @@ select {
   background: rgba(12, 37, 22, 0.98);
   box-shadow: 0 18px 32px rgba(0, 0, 0, 0.28);
   transform: translateX(-50%);
+  line-height: 1.2;
 }
 
 .roster-chemistry-section {
@@ -618,6 +635,7 @@ select {
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: rgba(248, 245, 234, 0.72);
+  line-height: 1.2;
 }
 
 .roster-chemistry-chip-list,
@@ -638,6 +656,7 @@ select {
   border: 1px solid rgba(248, 245, 234, 0.12);
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.05);
+  line-height: 1.2;
 }
 
 .roster-chemistry-chip span {
@@ -645,6 +664,7 @@ select {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  line-height: 1.2;
 }
 
 .roster-chemistry-chip-remove {
@@ -653,6 +673,7 @@ select {
   background: transparent;
   color: #ffd3c7;
   font-weight: 800;
+  line-height: 1;
   cursor: pointer;
 }
 
@@ -663,6 +684,7 @@ select {
   background: rgba(255, 255, 255, 0.05);
   color: var(--text);
   text-align: left;
+  line-height: 1.2;
   cursor: pointer;
   transition:
     transform 120ms ease,
@@ -680,6 +702,7 @@ select {
 .roster-chemistry-limit {
   color: rgba(248, 245, 234, 0.72);
   font-size: 0.88rem;
+  line-height: 1.2;
 }
 
 .roster-chemistry-limit {
@@ -688,7 +711,7 @@ select {
 }
 
 .roster-actions-cell {
-  padding: 0 5px;
+  padding: 0 2px;
   background: transparent;
   border: 0;
   text-align: center;
@@ -699,7 +722,7 @@ select {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 40px;
+  min-height: 32px;
 }
 
 .roster-menu-button {
@@ -707,7 +730,7 @@ select {
   align-items: center;
   justify-content: center;
   min-width: 20px;
-  min-height: 40px;
+  min-height: 32px;
   border: 0;
   padding: 0;
   background: transparent;

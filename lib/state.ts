@@ -24,7 +24,7 @@ import type {
 export function createEmptyPlayerAttributes(): PlayerAttributes {
   return PLAYER_ATTRIBUTE_GROUPS.flatMap((group) => group.attributes).reduce<PlayerAttributes>(
     (attributes, attribute) => {
-      attributes[attribute.key] = 0;
+      attributes[attribute.key] = null;
       return attributes;
     },
     {} as PlayerAttributes
@@ -46,16 +46,12 @@ export function sanitizePlayerAttributes(
   for (const key of Object.keys(base) as PlayerAttributeKey[]) {
     const value = attributes?.[key];
     base[key] =
-      value === 0 || value === 1 || value === 2 || value === 3 || value === 4 || value === 5
+      value === 1 || value === 2 || value === 3 || value === 4 || value === 5
         ? value
         : null;
   }
 
   return base;
-}
-
-function hasAnyPlayerAttribute(attributes: PlayerAttributes): boolean {
-  return Object.values(attributes).some((value) => value !== null);
 }
 
 function sanitizePlayerChemistryIds(
@@ -164,12 +160,7 @@ export function sanitizePlayers(players: Player[]): Player[] {
       rowNumber,
       name: player.name ?? "",
       positions: [...new Set(player.positions)].sort((a, b) => a - b) as Position[],
-      attributes: (() => {
-        const nextAttributes = sanitizePlayerAttributes(player.attributes);
-        return hasAnyPlayerAttribute(nextAttributes)
-          ? nextAttributes
-          : getDefaultPlayerAttributes(rowNumber);
-      })()
+      attributes: sanitizePlayerAttributes(player.attributes)
     };
   });
   const validPlayerIds = new Set(normalizedPlayers.map((player) => player.id));

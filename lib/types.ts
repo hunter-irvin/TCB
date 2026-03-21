@@ -11,7 +11,7 @@ export type PlayerAttributeKey =
   | "rebounding"
   | "transition";
 
-export type PlayerAttributeRating = 0 | 1 | 2 | 3 | 4 | 5;
+export type PlayerAttributeRating = 1 | 2 | 3 | 4 | 5;
 
 export type PlayerAttributes = Record<PlayerAttributeKey, PlayerAttributeRating | null>;
 
