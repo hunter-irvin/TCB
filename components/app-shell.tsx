@@ -44,26 +44,38 @@ export function AppShell({
   const pathname = usePathname();
   const activePage = getRunPageFromPathname(pathname);
   const [runMenuOpen, setRunMenuOpen] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const runSwitcherRef = useRef<HTMLDivElement | null>(null);
+  const mobileNavRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     setRunMenuOpen(false);
+    setMobileNavOpen(false);
   }, [pathname]);
 
   useEffect(() => {
-    if (!runMenuOpen) {
+    if (!runMenuOpen && !mobileNavOpen) {
       return undefined;
     }
 
     const handlePointerDown = (event: MouseEvent) => {
-      if (!runSwitcherRef.current?.contains(event.target as Node)) {
+      const target = event.target as Node;
+      const insideRunSwitcher = runSwitcherRef.current?.contains(target);
+      const insideMobileNav = mobileNavRef.current?.contains(target);
+
+      if (!insideRunSwitcher) {
         setRunMenuOpen(false);
+      }
+
+      if (!insideMobileNav) {
+        setMobileNavOpen(false);
       }
     };
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setRunMenuOpen(false);
+        setMobileNavOpen(false);
       }
     };
 
@@ -74,7 +86,7 @@ export function AppShell({
       window.removeEventListener("mousedown", handlePointerDown);
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [runMenuOpen]);
+  }, [mobileNavOpen, runMenuOpen]);
 
   return (
     <main className={["shell", shellClassName].filter(Boolean).join(" ")}>
@@ -94,6 +106,74 @@ export function AppShell({
           {headerActions || showNav || showRunSwitcher ? (
             <div className="page-header-side">
               {headerActions}
+              {(showNav || showRunSwitcher) ? (
+                <div ref={mobileNavRef} className="mobile-nav">
+                  <button
+                    type="button"
+                    className={`mobile-nav-toggle${mobileNavOpen ? " open" : ""}`}
+                    aria-label={`Open navigation menu. Current run: ${run.name}`}
+                    aria-expanded={mobileNavOpen}
+                    aria-haspopup="menu"
+                    onClick={() => setMobileNavOpen((current) => !current)}
+                  >
+                    <span className="mobile-nav-toggle-lines" aria-hidden="true">
+                      <span />
+                      <span />
+                      <span />
+                    </span>
+                  </button>
+                  {mobileNavOpen ? (
+                    <div className="mobile-nav-menu" role="menu" aria-label="Navigation">
+                      {showNav ? (
+                        <div className="mobile-nav-section">
+                          <div className="mobile-nav-section-title">Pages</div>
+                          <div className="mobile-nav-links">
+                            {tabs.map((tab) => {
+                              const href = buildRunPath(run.slug, tab.page);
+                              const active = activePage === tab.page;
+                              return (
+                                <Link
+                                  key={href}
+                                  href={href}
+                                  className={`mobile-nav-link${active ? " active" : ""}`}
+                                  role="menuitem"
+                                  onClick={() => setMobileNavOpen(false)}
+                                >
+                                  {tab.label}
+                                </Link>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ) : null}
+                      {showRunSwitcher ? (
+                        <div className="mobile-nav-section">
+                          <div className="mobile-nav-section-title">Runs</div>
+                          <div className="mobile-nav-links">
+                            {RUNS.map((candidate) => (
+                              <Link
+                                key={candidate.slug}
+                                href={buildRunPath(candidate.slug, "roster")}
+                                className={`mobile-nav-link run${candidate.slug === run.slug ? " active" : ""}`}
+                                role="menuitem"
+                                onClick={() => {
+                                  persistRunSlug(candidate.slug);
+                                  setMobileNavOpen(false);
+                                }}
+                              >
+                                <span className="mobile-nav-run-badge" aria-hidden="true">
+                                  {candidate.initials}
+                                </span>
+                                <span>{candidate.name}</span>
+                              </Link>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               {showNav ? (
                 <nav className="tabs" aria-label="Primary">
                   {tabs.map((tab) => {
