@@ -121,6 +121,14 @@ type ScenarioChartSegment = {
 const SCENARIO_CHART_MAX_TOTAL = 75;
 const TEAM_SYNC_DEBOUNCE_MS = 1000;
 
+function roundChartValue(value: number) {
+  return Math.round((value + Number.EPSILON) * 10) / 10;
+}
+
+function formatChartValue(value: number) {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
 function getTeamDisplayName(team: Team, index: number) {
   const name = team.name.trim();
   return name || `Team ${index + 1}`;
@@ -167,11 +175,13 @@ function buildScenarioAttributeCharts(
   return PLAYER_ATTRIBUTE_GROUPS.map((group) => {
     const stacks = teams.map((team) => {
       const segments: ScenarioChartSegment[] = group.attributes.map((attribute) => {
-        const value = POSITIONS.reduce((total, position) => {
+        const value = roundChartValue(
+          POSITIONS.reduce((total, position) => {
           const playerId = assignments[team.id]?.[position] ?? null;
           const player = playerId ? playersById.get(playerId) ?? null : null;
           return total + (player?.attributes[attribute.key] ?? 0);
-        }, 0);
+          }, 0)
+        );
 
         return {
           key: attribute.key,
@@ -195,7 +205,7 @@ function buildScenarioAttributeCharts(
 
       return {
         team,
-        total: segments.reduce((sum, segment) => sum + segment.value, 0),
+        total: roundChartValue(segments.reduce((sum, segment) => sum + segment.value, 0)),
         segments
       };
     });
@@ -2963,14 +2973,14 @@ function ScenarioAttributeCharts({ charts }: { charts: ScenarioAttributeChart[] 
           <div className="scenario-chart-grid">
             {chart.stacks.map((stack, stackIndex) => (
               <div key={stack.team.id} className="scenario-chart-column">
-                <div className="scenario-chart-total">{stack.total}</div>
+                <div className="scenario-chart-total">{formatChartValue(stack.total)}</div>
                 <div className="scenario-chart-bar">
                   {stack.segments.map((segment, index) => (
                     <div
                       key={segment.key}
                       className={`scenario-chart-segment tone-${chart.tone}${segment.variant === "chemistry" ? " chemistry" : ""}`}
                       tabIndex={0}
-                      aria-label={`${segment.label}: ${segment.value}`}
+                      aria-label={`${segment.label}: ${formatChartValue(segment.value)}`}
                       style={{
                         height: `${(segment.value / chart.maxTotal) * 100}%`,
                         background: getScenarioChartSegmentBackground(
@@ -2981,7 +2991,7 @@ function ScenarioAttributeCharts({ charts }: { charts: ScenarioAttributeChart[] 
                       }}
                     >
                       <span className="scenario-chart-tooltip">
-                        {segment.label}: {segment.value}
+                        {segment.label}: {formatChartValue(segment.value)}
                       </span>
                     </div>
                   ))}

@@ -198,6 +198,18 @@ function getInitialSortDirection(key: RosterSortKey): RosterSortDirection {
   return "desc";
 }
 
+function formatAttributeSelectValue(value: number | null) {
+  if (value === null) {
+    return "";
+  }
+
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
+function shouldShowCustomAttributeValue(value: number | null) {
+  return value !== null && !Number.isInteger(value);
+}
+
 function RosterContent() {
   const {
     addPlayer,
@@ -560,10 +572,16 @@ function RosterRow({
       {PLAYER_ATTRIBUTE_GROUPS.flatMap((group) =>
         group.attributes.map((attribute) => (
           <td key={attribute.key} className="roster-attribute-cell">
+            {(() => {
+              const currentValue = attributes[attribute.key];
+              const selectValue = formatAttributeSelectValue(currentValue);
+              const showCustomValue = shouldShowCustomAttributeValue(currentValue);
+
+              return (
             <select
               className="roster-attribute-select"
               aria-label={`Player ${rowNumber} ${attribute.label}`}
-              value={attributes[attribute.key] ?? ""}
+              value={selectValue}
               onChange={(event) =>
                 onAttributeChange(
                   id,
@@ -573,12 +591,17 @@ function RosterRow({
               }
             >
               <option value="">-</option>
+              {showCustomValue ? (
+                <option value={selectValue}>{selectValue}</option>
+              ) : null}
               {ATTRIBUTE_RATINGS.map((rating) => (
                 <option key={rating} value={rating}>
                   {rating}
                 </option>
               ))}
             </select>
+              );
+            })()}
           </td>
         ))
       )}

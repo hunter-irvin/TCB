@@ -38,17 +38,22 @@ export function createEmptyPlayerChemistry(): PlayerChemistry {
   };
 }
 
+function normalizePlayerAttributeValue(value: number | null | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+
+  const rounded = Math.round((value + Number.EPSILON) * 10) / 10;
+  return rounded >= 1 && rounded <= 5 ? rounded : null;
+}
+
 export function sanitizePlayerAttributes(
   attributes: Partial<Record<PlayerAttributeKey, number | null>> | undefined
 ): PlayerAttributes {
   const base = createEmptyPlayerAttributes();
 
   for (const key of Object.keys(base) as PlayerAttributeKey[]) {
-    const value = attributes?.[key];
-    base[key] =
-      value === 1 || value === 2 || value === 3 || value === 4 || value === 5
-        ? value
-        : null;
+    base[key] = normalizePlayerAttributeValue(attributes?.[key]);
   }
 
   return base;

@@ -12,8 +12,9 @@ export type PlayerAttributeKey =
   | "transition";
 
 export type PlayerAttributeRating = 1 | 2 | 3 | 4 | 5;
+export type PlayerAttributeValue = number;
 
-export type PlayerAttributes = Record<PlayerAttributeKey, PlayerAttributeRating | null>;
+export type PlayerAttributes = Record<PlayerAttributeKey, PlayerAttributeValue | null>;
 
 export type PlayerChemistryKind = "bonus" | "tax";
 
