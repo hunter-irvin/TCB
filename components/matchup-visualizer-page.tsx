@@ -50,6 +50,47 @@ function createCurvedLinkPath(sourceAngle: number, targetAngle: number) {
   return `M ${start.x} ${start.y} C ${sourceControl.x} ${sourceControl.y}, ${targetControl.x} ${targetControl.y}, ${end.x} ${end.y}`;
 }
 
+function MatchupVisualizerLegend({ view }: { view: MatchupVisualizerView }) {
+  if (view === "overall") {
+    return (
+      <div className="matchup-visualizer-legend">
+        <div className="matchup-visualizer-legend-title">Legend</div>
+        <div className="matchup-visualizer-legend-spectrum" aria-hidden="true" />
+        <div className="matchup-visualizer-legend-scale">
+          <span>Loses</span>
+          <span>Fair</span>
+          <span>Wins</span>
+        </div>
+      </div>
+    );
+  }
+
+  const items =
+    view === "good_matchup"
+      ? [{ label: "Fair", className: "good" }]
+      : [
+          { label: "Wins", className: "wins" },
+          { label: "Loses", className: "loses" }
+        ];
+
+  return (
+    <div className="matchup-visualizer-legend">
+      <div className="matchup-visualizer-legend-title">Legend</div>
+      <div className="matchup-visualizer-legend-items">
+        {items.map((item) => (
+          <div key={item.label} className="matchup-visualizer-legend-item">
+            <span
+              className={`matchup-visualizer-legend-swatch ${item.className}`}
+              aria-hidden="true"
+            />
+            <span>{item.label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function MatchupChordDiagram({
   data,
   perspective,
@@ -140,6 +181,7 @@ function MatchupChordDiagram({
           targetPlayerId: edge.targetPlayerId,
           count: edge.count,
           tone: edge.tone,
+          colorHex: edge.colorHex,
           path: createCurvedLinkPath(sourceGroup.angle, targetGroup.angle),
           strokeWidth: strokeWidthScale(edge.count)
         };
@@ -188,7 +230,13 @@ function MatchupChordDiagram({
         className="matchup-visualizer-chart"
         viewBox={`0 0 ${CHART_SIZE} ${CHART_HEIGHT}`}
         role="img"
-        aria-label={`${perspective === "offense" ? "Offense" : "Defense"} ${data.view === "good_matchup" ? "good matchup" : "imbalanced matchup"} chord diagram`}
+        aria-label={`${perspective === "offense" ? "Offense" : "Defense"} ${
+          data.view === "good_matchup"
+            ? "fair matchup"
+            : data.view === "imbalanced"
+              ? "unfair matchup"
+              : "overall matchup"
+        } chord diagram`}
         onClick={(event) => {
           if (event.target === event.currentTarget) {
             onSelectedPlayerChange(null);
@@ -224,6 +272,7 @@ function MatchupChordDiagram({
                 data-source-player-id={link.sourcePlayerId}
                 data-target-player-id={link.targetPlayerId}
                 strokeWidth={link.strokeWidth}
+                style={data.view === "overall" ? { stroke: link.colorHex } : undefined}
               />
             );
           })}
@@ -290,7 +339,7 @@ function MatchupChordDiagram({
 export function MatchupVisualizerPage() {
   const { run } = useRun();
   const [perspective, setPerspective] = useState<MatchupVisualizerPerspective>("offense");
-  const [view, setView] = useState<MatchupVisualizerView>("good_matchup");
+  const [view, setView] = useState<MatchupVisualizerView>("overall");
   const [minimumMatchups, setMinimumMatchups] = useState(MATCHUP_VISUALIZER_MIN_COUNT);
   const [selectedPlayerId, setSelectedPlayerId] = useState<number | null>(null);
   const [requestState, setRequestState] = useState<MatchupVisualizerRequestState>({
@@ -351,21 +400,39 @@ export function MatchupVisualizerPage() {
     [minimumMatchups, selectedData]
   );
   const hasConnections = Boolean(filteredData && filteredData.totalConnections > 0);
+  const rawVoteTotal = readyBundle ? readyBundle.rawVoteTotals[view] : 0;
   const visibleVoteCount = filteredData
     ? selectedPlayerId !== null && filteredData.nodes.some((node) => node.id === selectedPlayerId)
       ? filteredData.edges
           .filter((edge) => edge.sourcePlayerId === selectedPlayerId)
           .reduce((sum, edge) => sum + edge.voteTotal, 0)
-      : filteredData.totalVotes
+      : rawVoteTotal
     : 0;
-  const countLabel = view === "good_matchup" ? "Good Matchup Votes:" : "Imbalanced Votes:";
+  const countLabel =
+    view === "good_matchup"
+      ? "Fair Votes:"
+      : view === "imbalanced"
+        ? "Unfair Votes:"
+        : "Overall Votes:";
   const countUnitLabel = minimumMatchups === 1 ? "vote" : "votes";
+  const minimumThresholdLabel =
+    view === "good_matchup"
+      ? `Minimum fair votes: ${minimumMatchups}`
+      : view === "imbalanced"
+        ? `Minimum unfair threshold: ${minimumMatchups}`
+        : `Minimum total votes: ${minimumMatchups}`;
   const emptyStateTitle =
-    view === "good_matchup" ? "No strong good-matchup links yet" : "No strong imbalanced links yet";
+    view === "good_matchup"
+      ? "No strong fair links yet"
+      : view === "imbalanced"
+        ? "No strong unfair links yet"
+        : "No strong overall links yet";
   const emptyStateDescription =
     view === "good_matchup"
-      ? `This view only includes play responses marked good matchup with at least ${minimumMatchups} ${countUnitLabel}. Collect more matchup-tinder data or lower the filter to light up the network.`
-      : `This view only includes imbalanced play responses with a net margin of at least ${minimumMatchups} ${countUnitLabel}. Collect more matchup-tinder data or lower the filter to light up the network.`;
+      ? `This view only includes play responses marked fair with at least ${minimumMatchups} ${countUnitLabel}. Collect more matchup-tinder data or lower the filter to light up the network.`
+      : view === "imbalanced"
+        ? `This view only includes unfair play responses with a net margin of at least ${minimumMatchups} ${countUnitLabel}. Collect more matchup-tinder data or lower the filter to light up the network.`
+        : `This view includes all play responses and only shows connections with at least ${minimumMatchups} total ${countUnitLabel}. Width reflects total vote count, and color runs from red through yellow to green based on the vote distribution.`;
 
   return (
     <AppShell
@@ -375,7 +442,7 @@ export function MatchupVisualizerPage() {
       <div className="matchup-visualizer-page">
         <div className="matchup-visualizer-controls">
           <div className="matchup-visualizer-toggle" role="tablist" aria-label="Matchup visualizer type">
-            {(["good_matchup", "imbalanced"] as MatchupVisualizerView[]).map((option) => (
+            {(["overall", "good_matchup", "imbalanced"] as MatchupVisualizerView[]).map((option) => (
               <button
                 key={option}
                 type="button"
@@ -384,7 +451,11 @@ export function MatchupVisualizerPage() {
                 className={`matchup-visualizer-toggle-button${view === option ? " active" : ""}`}
                 onClick={() => setView(option)}
               >
-                {option === "good_matchup" ? "Good Matchup" : "Imbalanced"}
+                {option === "overall"
+                  ? "Overall"
+                  : option === "good_matchup"
+                    ? "Fair"
+                    : "Unfair"}
               </button>
             ))}
           </div>
@@ -403,26 +474,6 @@ export function MatchupVisualizerPage() {
               </button>
             ))}
           </div>
-
-          <label className="matchup-visualizer-filter" htmlFor="matchup-visualizer-min-good-matchups">
-            <span className="matchup-visualizer-filter-endpoint" aria-hidden="true">
-              {MATCHUP_VISUALIZER_MIN_COUNT}
-            </span>
-            <input
-              id="matchup-visualizer-min-good-matchups"
-              className="matchup-visualizer-filter-slider"
-              type="range"
-              min={MATCHUP_VISUALIZER_MIN_COUNT}
-              max={MATCHUP_VISUALIZER_MAX_COUNT}
-              step={1}
-              value={minimumMatchups}
-              aria-label={`Minimum ${view === "good_matchup" ? "good" : "imbalanced"} matchup threshold: ${minimumMatchups}`}
-              onChange={(event) => setMinimumMatchups(Number(event.target.value))}
-            />
-            <span className="matchup-visualizer-filter-endpoint" aria-hidden="true">
-              {MATCHUP_VISUALIZER_MAX_COUNT}
-            </span>
-          </label>
         </div>
 
         <section className="panel matchup-visualizer-shell">
@@ -442,18 +493,50 @@ export function MatchupVisualizerPage() {
               <p>{emptyStateDescription}</p>
             </div>
           ) : (
-            <>
-              <div className="matchup-visualizer-count-text" aria-live="polite">
-                <span className="matchup-visualizer-count-label">{countLabel}</span>
-                <strong>{visibleVoteCount}</strong>
+            <div className="matchup-visualizer-layout">
+              <div className="matchup-visualizer-figure">
+                <MatchupChordDiagram
+                  data={filteredData}
+                  perspective={perspective}
+                  selectedPlayerId={selectedPlayerId}
+                  onSelectedPlayerChange={setSelectedPlayerId}
+                />
               </div>
-              <MatchupChordDiagram
-                data={filteredData}
-                perspective={perspective}
-                selectedPlayerId={selectedPlayerId}
-                onSelectedPlayerChange={setSelectedPlayerId}
-              />
-            </>
+              <aside className="matchup-visualizer-settings">
+                <div className="matchup-visualizer-count-text" aria-live="polite">
+                  <span className="matchup-visualizer-count-label">{countLabel}</span>
+                  <strong>{visibleVoteCount}</strong>
+                </div>
+
+                <MatchupVisualizerLegend view={view} />
+
+                <label
+                  className="matchup-visualizer-filter matchup-visualizer-filter-compact"
+                  htmlFor="matchup-visualizer-min-good-matchups"
+                >
+                  <span className="matchup-visualizer-filter-label">{minimumThresholdLabel}</span>
+                  <div className="matchup-visualizer-filter-control">
+                    <span className="matchup-visualizer-filter-endpoint" aria-hidden="true">
+                      {MATCHUP_VISUALIZER_MIN_COUNT}
+                    </span>
+                    <input
+                      id="matchup-visualizer-min-good-matchups"
+                      className="matchup-visualizer-filter-slider"
+                      type="range"
+                      min={MATCHUP_VISUALIZER_MIN_COUNT}
+                      max={MATCHUP_VISUALIZER_MAX_COUNT}
+                      step={1}
+                      value={minimumMatchups}
+                      aria-label={minimumThresholdLabel}
+                      onChange={(event) => setMinimumMatchups(Number(event.target.value))}
+                    />
+                    <span className="matchup-visualizer-filter-endpoint" aria-hidden="true">
+                      {MATCHUP_VISUALIZER_MAX_COUNT}
+                    </span>
+                  </div>
+                </label>
+              </aside>
+            </div>
           )}
         </section>
       </div>

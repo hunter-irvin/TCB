@@ -2460,10 +2460,11 @@ select {
 
 .matchup-visualizer-toggle {
   display: inline-grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
   gap: 6px;
-  width: 100%;
-  max-width: 360px;
+  width: auto;
+  max-width: 100%;
   padding: 6px;
   border-radius: 999px;
   background: rgba(0, 0, 0, 0.24);
@@ -2475,11 +2476,12 @@ select {
 .matchup-visualizer-toggle-button {
   border: 0;
   border-radius: 999px;
-  padding: 12px 18px;
+  padding: 11px 14px;
   background: transparent;
   color: rgba(248, 245, 234, 0.74);
-  font-size: 1.1rem;
+  font-size: 1rem;
   font-weight: 800;
+  white-space: nowrap;
   cursor: pointer;
   transition: background 140ms ease, color 140ms ease, transform 140ms ease, box-shadow 140ms ease;
 }
@@ -2523,6 +2525,32 @@ select {
     0 14px 28px rgba(0, 0, 0, 0.14);
 }
 
+.matchup-visualizer-filter-compact {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  padding: 16px;
+  border-radius: 20px;
+  background: rgba(255, 248, 227, 0.06);
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+}
+
+.matchup-visualizer-filter-label {
+  color: #fff7e5;
+  font-size: 0.88rem;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+}
+
+.matchup-visualizer-filter-control {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
 .matchup-visualizer-filter-slider {
   flex: 1 1 auto;
   min-width: 0;
@@ -2541,6 +2569,23 @@ select {
   display: grid;
   gap: 12px;
   padding: 18px;
+}
+
+.matchup-visualizer-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 240px;
+  gap: 18px;
+  align-items: start;
+}
+
+.matchup-visualizer-figure {
+  min-width: 0;
+}
+
+.matchup-visualizer-settings {
+  display: grid;
+  gap: 14px;
+  align-content: start;
 }
 
 .matchup-visualizer-state-card {
@@ -2613,6 +2658,107 @@ select {
 
 .matchup-visualizer-link.inactive {
   opacity: 0.015;
+}
+
+.matchup-visualizer-legend {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border-radius: 20px;
+  background: rgba(255, 248, 227, 0.06);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 14px 28px rgba(0, 0, 0, 0.14);
+}
+
+.matchup-visualizer-legend-title {
+  color: #fff7e5;
+  font-size: 0.82rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.matchup-visualizer-legend-items {
+  display: grid;
+  gap: 10px;
+}
+
+.matchup-visualizer-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: rgba(248, 245, 234, 0.88);
+  font-size: 0.92rem;
+  font-weight: 700;
+}
+
+.matchup-visualizer-legend-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  flex: 0 0 auto;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.18);
+}
+
+.matchup-visualizer-legend-swatch.good {
+  background: #facc15;
+}
+
+.matchup-visualizer-legend-swatch.wins {
+  background: #16a34a;
+}
+
+.matchup-visualizer-legend-swatch.loses {
+  background: #dc2626;
+}
+
+.matchup-visualizer-legend-spectrum {
+  width: 100%;
+  height: 14px;
+  border-radius: 999px;
+  background:
+    linear-gradient(
+      90deg,
+      transparent 34.4%,
+      rgba(255, 255, 255, 0.35) 34.4%,
+      rgba(255, 255, 255, 0.35) 35.6%,
+      transparent 35.6%
+    ),
+    linear-gradient(
+      90deg,
+      transparent 64.4%,
+      rgba(255, 255, 255, 0.35) 64.4%,
+      rgba(255, 255, 255, 0.35) 65.6%,
+      transparent 65.6%
+    ),
+    linear-gradient(
+      90deg,
+      #dc2626 0%,
+      #facc15 35%,
+      #facc15 65%,
+      #16a34a 100%
+    );
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.14),
+    0 8px 18px rgba(0, 0, 0, 0.16);
+}
+
+.matchup-visualizer-legend-scale {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  color: rgba(248, 245, 234, 0.76);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.matchup-visualizer-legend-scale span:nth-child(2) {
+  text-align: center;
+}
+
+.matchup-visualizer-legend-scale span:last-child {
+  text-align: right;
 }
 
 .matchup-visualizer-node-arc {
@@ -3029,9 +3175,20 @@ select {
     align-items: stretch;
   }
 
-  .matchup-visualizer-toggle,
-  .matchup-visualizer-filter {
+  .matchup-visualizer-toggle {
     width: 100%;
+  }
+
+  .matchup-visualizer-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .matchup-visualizer-settings {
+    order: 2;
+  }
+
+  .matchup-visualizer-figure {
+    order: 1;
   }
 
   .matchup-visualizer-state-card {

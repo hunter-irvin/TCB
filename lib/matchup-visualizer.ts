@@ -1,7 +1,8 @@
 export const MATCHUP_VISUALIZER_PERSPECTIVES = ["offense", "defense"] as const;
-export const MATCHUP_VISUALIZER_VIEWS = ["good_matchup", "imbalanced"] as const;
+export const MATCHUP_VISUALIZER_VIEWS = ["good_matchup", "imbalanced", "overall"] as const;
 export const MATCHUP_VISUALIZER_MIN_COUNT = 1;
 export const MATCHUP_VISUALIZER_MAX_COUNT = 5;
+export const MATCHUP_VISUALIZER_GOOD_DEADBAND = 0.3;
 
 export type MatchupVisualizerPerspective = (typeof MATCHUP_VISUALIZER_PERSPECTIVES)[number];
 export type MatchupVisualizerView = (typeof MATCHUP_VISUALIZER_VIEWS)[number];
@@ -20,6 +21,12 @@ export type MatchupVisualizerEdge = {
   count: number;
   voteTotal: number;
   tone: MatchupVisualizerEdgeTone;
+  winVotes: number;
+  goodVotes: number;
+  loseVotes: number;
+  rawScore: number;
+  normalizedScore: number;
+  colorHex: string;
 };
 
 export type MatchupVisualizerResponse = {
@@ -38,15 +45,18 @@ export type MatchupVisualizerDatasetCollection = {
   offense: {
     good_matchup: MatchupVisualizerResponse;
     imbalanced: MatchupVisualizerResponse;
+    overall: MatchupVisualizerResponse;
   };
   defense: {
     good_matchup: MatchupVisualizerResponse;
     imbalanced: MatchupVisualizerResponse;
+    overall: MatchupVisualizerResponse;
   };
 };
 
 export type MatchupVisualizerBundleResponse = {
   minCount: number;
+  rawVoteTotals: Record<MatchupVisualizerView, number>;
   datasets: MatchupVisualizerDatasetCollection;
 };
 
@@ -106,6 +116,68 @@ export function abbreviateVisualizerName(name: string) {
   const lastName = parts[parts.length - 1];
   const firstNames = parts.slice(0, -1).join(" ");
   return `${firstNames} ${lastName.charAt(0)}.`;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function interpolateChannel(start: number, end: number, amount: number) {
+  return Math.round(start + (end - start) * amount);
+}
+
+function rgbToHex(red: number, green: number, blue: number) {
+  return `#${[red, green, blue]
+    .map((channel) => channel.toString(16).padStart(2, "0"))
+    .join("")}`;
+}
+
+export function normalizeUnifiedColorScore(rawScore: number) {
+  const clampedScore = clamp(rawScore, -1, 1);
+
+  if (clampedScore <= -MATCHUP_VISUALIZER_GOOD_DEADBAND) {
+    return (clampedScore + MATCHUP_VISUALIZER_GOOD_DEADBAND) / (1 - MATCHUP_VISUALIZER_GOOD_DEADBAND);
+  }
+
+  if (clampedScore >= MATCHUP_VISUALIZER_GOOD_DEADBAND) {
+    return (clampedScore - MATCHUP_VISUALIZER_GOOD_DEADBAND) / (1 - MATCHUP_VISUALIZER_GOOD_DEADBAND);
+  }
+
+  return 0;
+}
+
+export function getUnifiedEdgeTone(score: number): MatchupVisualizerEdgeTone {
+  if (score > 0) {
+    return "positive";
+  }
+
+  if (score < 0) {
+    return "negative";
+  }
+
+  return "neutral";
+}
+
+export function interpolateUnifiedMatchupColor(score: number) {
+  const clampedScore = clamp(score, -1, 1);
+  const red = { red: 220, green: 38, blue: 38 };
+  const yellow = { red: 250, green: 204, blue: 21 };
+  const green = { red: 22, green: 163, blue: 74 };
+
+  if (clampedScore < 0) {
+    const amount = clampedScore + 1;
+    return rgbToHex(
+      interpolateChannel(red.red, yellow.red, amount),
+      interpolateChannel(red.green, yellow.green, amount),
+      interpolateChannel(red.blue, yellow.blue, amount)
+    );
+  }
+
+  return rgbToHex(
+    interpolateChannel(yellow.red, green.red, clampedScore),
+    interpolateChannel(yellow.green, green.green, clampedScore),
+    interpolateChannel(yellow.blue, green.blue, clampedScore)
+  );
 }
 
 function createMatchupVisualizerResponse(
@@ -211,12 +283,46 @@ export function buildMatchupVisualizerResponse(
         continue;
       }
 
+      const voteTotal = aggregate.goodCount;
       edges.push({
         sourcePlayerId: aggregate.sourcePlayerId,
         targetPlayerId: aggregate.targetPlayerId,
         count: aggregate.goodCount,
-        voteTotal: aggregate.goodCount,
-        tone: "neutral"
+        voteTotal,
+        tone: "neutral",
+        winVotes: 0,
+        goodVotes: aggregate.goodCount,
+        loseVotes: 0,
+        rawScore: 0,
+        normalizedScore: 0,
+        colorHex: interpolateUnifiedMatchupColor(0)
+      });
+      continue;
+    }
+
+    if (view === "overall") {
+      const totalVotes =
+        aggregate.goodCount + aggregate.positiveCount + aggregate.negativeCount;
+
+      if (totalVotes < minCount) {
+        continue;
+      }
+
+      const rawScore = (aggregate.positiveCount - aggregate.negativeCount) / totalVotes;
+      const normalizedScore = normalizeUnifiedColorScore(rawScore);
+
+      edges.push({
+        sourcePlayerId: aggregate.sourcePlayerId,
+        targetPlayerId: aggregate.targetPlayerId,
+        count: totalVotes,
+        voteTotal: totalVotes,
+        tone: getUnifiedEdgeTone(normalizedScore),
+        winVotes: aggregate.positiveCount,
+        goodVotes: aggregate.goodCount,
+        loseVotes: aggregate.negativeCount,
+        rawScore,
+        normalizedScore,
+        colorHex: interpolateUnifiedMatchupColor(normalizedScore)
       });
       continue;
     }
@@ -226,12 +332,22 @@ export function buildMatchupVisualizerResponse(
       continue;
     }
 
+    const voteTotal = aggregate.positiveCount + aggregate.negativeCount;
+    const rawScore = netCount / voteTotal;
+    const normalizedScore = normalizeUnifiedColorScore(rawScore);
+
     edges.push({
       sourcePlayerId: aggregate.sourcePlayerId,
       targetPlayerId: aggregate.targetPlayerId,
       count: Math.abs(netCount),
-      voteTotal: aggregate.positiveCount + aggregate.negativeCount,
-      tone: netCount > 0 ? "positive" : "negative"
+      voteTotal,
+      tone: netCount > 0 ? "positive" : "negative",
+      winVotes: aggregate.positiveCount,
+      goodVotes: 0,
+      loseVotes: aggregate.negativeCount,
+      rawScore,
+      normalizedScore,
+      colorHex: interpolateUnifiedMatchupColor(normalizedScore)
     });
   }
 
@@ -245,6 +361,11 @@ export function buildMatchupVisualizerBundleResponse(
 ): MatchupVisualizerBundleResponse {
   return {
     minCount,
+    rawVoteTotals: {
+      overall: rows.length,
+      good_matchup: rows.filter((row) => row.result === "good_matchup").length,
+      imbalanced: rows.filter((row) => row.result !== "good_matchup").length
+    },
     datasets: {
       offense: {
         good_matchup: buildMatchupVisualizerResponse(
@@ -259,6 +380,13 @@ export function buildMatchupVisualizerBundleResponse(
           rows,
           "offense",
           "imbalanced",
+          minCount
+        ),
+        overall: buildMatchupVisualizerResponse(
+          players,
+          rows,
+          "offense",
+          "overall",
           minCount
         )
       },
@@ -276,6 +404,13 @@ export function buildMatchupVisualizerBundleResponse(
           "defense",
           "imbalanced",
           minCount
+        ),
+        overall: buildMatchupVisualizerResponse(
+          players,
+          rows,
+          "defense",
+          "overall",
+          minCount
         )
       }
     }
@@ -288,7 +423,9 @@ export function filterMatchupVisualizerResponse(
 ): MatchupVisualizerResponse {
   return createMatchupVisualizerResponse(
     data.nodes,
-    data.edges.filter((edge) => edge.count >= minCount),
+    data.edges.filter((edge) =>
+      data.view === "imbalanced" ? edge.count >= minCount : edge.voteTotal >= minCount
+    ),
     data.perspective,
     data.view,
     minCount
