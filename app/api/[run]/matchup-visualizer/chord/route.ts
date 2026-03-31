@@ -8,7 +8,7 @@ import { getRunBySlug } from "@/lib/runs";
 import { hasSupabasePublicConfig } from "@/lib/supabase/config";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
-const PLAYER_SELECT_COLUMNS = "id,row_number,name";
+const PLAYER_SELECT_COLUMNS = "id,row_number,active,name";
 const RESPONSE_SELECT_COLUMNS = "offense_player_id,defense_player_id,result";
 
 export async function GET(
@@ -34,6 +34,7 @@ export async function GET(
     .from("players")
     .select(PLAYER_SELECT_COLUMNS)
     .eq("run_id", run.id)
+    .eq("active", true)
     .order("row_number", { ascending: true });
 
   if (playerError) {

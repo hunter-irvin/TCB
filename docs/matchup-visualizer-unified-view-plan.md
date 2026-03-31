@@ -1,34 +1,112 @@
-# Matchup Visualizer Unified View Plan
+# Matchup Visualizer Unified View Implementation
 
-## Goal
+## Status
 
-Add a new `Unified` matchup visualizer view that combines:
+Implemented.
+
+The matchup visualizer now supports three views:
+
+- `Overall`
+- `Fair`
+- `Unfair`
+
+`Overall` is the default tab and appears first in the view toggle.
+
+## Current User-Facing Behavior
+
+### Views
+
+- `Overall` combines all play-mode matchup responses.
+- `Fair` shows only responses marked `good_matchup`.
+- `Unfair` shows only imbalanced responses, using the existing net-margin logic.
+
+### Perspectives
+
+- `Offense`
+- `Defense`
+
+The same directed player connection can render differently across the two perspectives because `win` and `lose` invert by perspective.
+
+### Layout
+
+The visualizer now has:
+
+- the chart on the left
+- a compact settings panel on the right
+
+The settings panel contains:
+
+- the vote counter
+- the legend
+- the minimum-vote slider
+
+On small screens, the settings panel stacks below the chart.
+
+## Implemented Naming
+
+On this page, the terminology is now:
+
+- `Overall`
+- `Fair`
+- `Unfair`
+
+This rename was applied to:
+
+- tab labels
+- vote-count labels
+- legend text
+- empty-state text
+- slider labels
+- aria labels for the chart
+
+Internal data values still use:
 
 - `good_matchup`
-- imbalanced positive outcomes
-- imbalanced negative outcomes
+- `imbalanced`
+- `overall`
 
-Each player-to-player connection should:
+The rename is presentation-layer only.
 
-- use arc width to represent total vote volume
-- use color to represent the directional mix of `win`, `good`, and `lose` votes
-- continue to support separate `Offense` and `Defense` perspectives
+## Implemented Data Model
 
-This plan is intentionally additive. The safest first version is to add `Unified` alongside the existing `Good Matchup` and `Imbalanced` views rather than replacing either current view.
+Relevant files:
 
-## Recommended Color Model
+- [lib/matchup-visualizer.ts](/c:/Users/irvinh/OneDrive%20-%20Jacobs%20Engineering%20Group%20Inc/Desktop/Repos/TCB/TCB/lib/matchup-visualizer.ts)
+- [components/matchup-visualizer-page.tsx](/c:/Users/irvinh/OneDrive%20-%20Jacobs%20Engineering%20Group%20Inc/Desktop/Repos/TCB/TCB/components/matchup-visualizer-page.tsx)
+- [app/api/[run]/matchup-visualizer/chord/route.ts](/c:/Users/irvinh/OneDrive%20-%20Jacobs%20Engineering%20Group%20Inc/Desktop/Repos/TCB/TCB/app/api/[run]/matchup-visualizer/chord/route.ts)
+- [app/globals.css](/c:/Users/irvinh/OneDrive%20-%20Jacobs%20Engineering%20Group%20Inc/Desktop/Repos/TCB/TCB/app/globals.css)
 
-We should implement the `good` zone in the math, not only in the color scale.
+The visualizer bundle now includes:
 
-Reason:
+- datasets for `good_matchup`, `imbalanced`, and `overall`
+- richer edge metadata for unified color rendering
+- raw vote totals per view for the top-right counter
 
-- it gives us explicit, testable behavior for when a connection should still count as visually `good`
-- it avoids tiny differences around zero creating slightly green or slightly red links that feel noisy
-- it keeps the UI logic simple because the API can return a normalized score and a derived tone band
+### Edge fields now used by `Overall`
 
-## Proposed Formula
+- `count`
+- `voteTotal`
+- `tone`
+- `winVotes`
+- `goodVotes`
+- `loseVotes`
+- `rawScore`
+- `normalizedScore`
+- `colorHex`
 
-For each directed player connection, aggregate:
+### Raw vote totals
+
+The bundle response now includes:
+
+- `rawVoteTotals.overall`
+- `rawVoteTotals.good_matchup`
+- `rawVoteTotals.imbalanced`
+
+This is used so the unselected vote counter shows the true underlying total for the current view rather than the sum of filtered chart edges.
+
+## Implemented Math
+
+For each directed player connection:
 
 - `winVotes`
 - `goodVotes`
@@ -36,32 +114,35 @@ For each directed player connection, aggregate:
 
 Where:
 
-- in `offense` perspective, `offense_wins` is `win` and `defense_wins` is `lose`
-- in `defense` perspective, `defense_wins` is `win` and `offense_wins` is `lose`
+- in `Offense`, `offense_wins` counts as `win` and `defense_wins` counts as `lose`
+- in `Defense`, `defense_wins` counts as `win` and `offense_wins` counts as `lose`
 
-Then compute:
-
-`totalVotes = winVotes + goodVotes + loseVotes`
+### Raw score
 
 `rawScore = (winVotes - loseVotes) / totalVotes`
 
-This yields:
+Where:
 
-- `-1` for all lose votes
-- `0` for all good votes, or perfectly balanced win/lose mixes
-- `+1` for all win votes
+`totalVotes = winVotes + goodVotes + loseVotes`
 
-### Good Deadband
+### Good deadband
 
-Use a centered deadband:
+Implemented deadband:
 
-- if `rawScore >= -0.2` and `rawScore <= 0.2`, treat the connection as visually `good`
+- `MATCHUP_VISUALIZER_GOOD_DEADBAND = 0.3`
 
-Recommended normalized color score:
+That means:
+
+- scores from `-0.3` to `+0.3` are treated as the middle `Fair` zone
+- only values outside that range move toward red or green
+
+### Normalization
+
+The current helper behaves like:
 
 ```ts
 function normalizeUnifiedColorScore(rawScore: number) {
-  const deadband = 0.2;
+  const deadband = 0.3;
 
   if (rawScore <= -deadband) {
     return (rawScore + deadband) / (1 - deadband);
@@ -75,284 +156,181 @@ function normalizeUnifiedColorScore(rawScore: number) {
 }
 ```
 
-This gives:
+This produces:
 
-- `0` for the full `good` range from `-0.2` to `+0.2`
-- `-1` to `0` outside the deadband on the lose side
-- `0` to `+1` outside the deadband on the win side
+- `0` for the full fair zone
+- negative values outside the fair zone on the lose side
+- positive values outside the fair zone on the win side
 
-Then color interpolation becomes:
+## Implemented Color Behavior
 
-- `normalizedScore = -1` => red
-- `normalizedScore = 0` => yellow
-- `normalizedScore = +1` => green
+### Overall
 
-Suggested stops:
+`Overall` uses a continuous red-yellow-green spectrum:
+
+- red: lose-leaning
+- yellow: fair / balanced
+- green: win-leaning
+
+Current base stops:
 
 - red: `#dc2626`
 - yellow: `#facc15`
 - green: `#16a34a`
 
-## Width Logic
+Links use direct inline stroke colors from `edge.colorHex`, not only the older fixed tone classes.
 
-In the unified view, link width should use:
+### Fair
 
-`count = totalVotes`
+`Fair` uses a yellow-only legend and neutral fair-link rendering.
 
-That is different from the current views:
+### Unfair
 
-- `good_matchup` uses `goodCount`
-- `imbalanced` uses `abs(winVotes - loseVotes)`
+`Unfair` keeps the legacy positive/negative treatment:
 
-This matches the product goal that width reflects how much data exists for the connection, while color reflects what the votes mean.
+- green for wins
+- red for loses
 
-## Current Implementation Shape
+## Implemented Width Behavior
 
-Current relevant files:
+### Overall
 
-- [lib/matchup-visualizer.ts](/c:/Users/irvinh/OneDrive%20-%20Jacobs%20Engineering%20Group%20Inc/Desktop/Repos/TCB/TCB/lib/matchup-visualizer.ts)
-- [components/matchup-visualizer-page.tsx](/c:/Users/irvinh/OneDrive%20-%20Jacobs%20Engineering%20Group%20Inc/Desktop/Repos/TCB/TCB/components/matchup-visualizer-page.tsx)
-- [app/api/[run]/matchup-visualizer/chord/route.ts](/c:/Users/irvinh/OneDrive%20-%20Jacobs%20Engineering%20Group%20Inc/Desktop/Repos/TCB/TCB/app/api/[run]/matchup-visualizer/chord/route.ts)
-- [app/globals.css](/c:/Users/irvinh/OneDrive%20-%20Jacobs%20Engineering%20Group%20Inc/Desktop/Repos/TCB/TCB/app/globals.css)
+In `Overall`:
 
-Current behavior:
+- link width represents `totalVotes`
 
-- the API builds two datasets per perspective: `good_matchup` and `imbalanced`
-- each edge currently carries only:
-  - `count`
-  - `voteTotal`
-  - `tone`
-- the chart styles links by CSS classes:
-  - `neutral`
-  - `positive`
-  - `negative`
-- the filter slider currently means:
-  - minimum good votes in `good_matchup`
-  - minimum net margin in `imbalanced`
+### Fair
 
-Unified view needs richer edge metadata than the current binary tone model.
+In `Fair`:
 
-## Implementation Plan
+- link width represents `goodCount`
 
-### Phase 1: Extend the data model
+### Unfair
 
-Update `lib/matchup-visualizer.ts` to add a third view:
+In `Unfair`:
 
-- `unified`
+- link width represents `abs(winVotes - loseVotes)`
 
-Add richer edge fields for unified rendering, likely:
+## Implemented Filter Behavior
 
-- `winVotes`
-- `goodVotes`
-- `loseVotes`
-- `rawScore`
-- `normalizedScore`
-- `colorHex`
+The slider meaning now depends on the current view.
 
-Recommended type changes:
+### Overall
 
-- extend `MATCHUP_VISUALIZER_VIEWS`
-- expand `MatchupVisualizerView`
-- expand `MatchupVisualizerEdge`
+- slider filters by minimum `totalVotes`
+- label shown to the user: `Minimum total votes`
 
-Keep existing fields for backward compatibility with current views where practical.
+### Fair
 
-### Phase 2: Build unified aggregates
+- slider filters by minimum fair votes
+- label shown to the user: `Minimum fair votes`
 
-Reuse the existing `buildPairAggregates` function, because it already computes:
+### Unfair
 
-- `goodCount`
-- `positiveCount`
-- `negativeCount`
+- slider filters by minimum unfair net margin
+- label shown to the user: `Minimum unfair threshold`
 
-Add a `unified` branch in `buildMatchupVisualizerResponse`.
+## Implemented Counter Behavior
 
-For unified edges:
+### When no player is selected
 
-- `count = goodCount + positiveCount + negativeCount`
-- `voteTotal = count`
-- `winVotes = positiveCount`
-- `goodVotes = goodCount`
-- `loseVotes = negativeCount`
-- `rawScore = (positiveCount - negativeCount) / count`
-- `normalizedScore = normalizeUnifiedColorScore(rawScore)`
-- `colorHex = interpolate red/yellow/green from normalizedScore`
+The vote counter now uses the raw total for the current view:
 
-### Phase 3: Define unified filtering
+- `Overall` = all play responses in scope
+- `Fair` = all `good_matchup` responses in scope
+- `Unfair` = all imbalanced responses in scope
 
-The unified view needs a threshold rule that still makes sense with width-based magnitude.
+For the current TCB dataset at the time of implementation, those totals are:
 
-Recommended first version:
+- `Overall`: `1038`
+- `Fair`: `415`
+- `Unfair`: `623`
 
-- slider filters by `totalVotes`
-- keep the existing slider range `1..5`
+### When a player is selected
 
-Reason:
+The counter continues to show the selected player’s outgoing visible vote total for the current filtered dataset.
 
-- it aligns with the new meaning of width
-- it avoids hiding high-volume neutral-yellow links that are important in unified mode
-- it keeps the filter intuitive: “show me connections with at least N total votes”
+That behavior was intentionally preserved.
 
-This should be implemented in `filterMatchupVisualizerResponse`.
+## Implemented Legend Behavior
 
-### Phase 4: Update the page controls and copy
+### Overall
 
-In `components/matchup-visualizer-page.tsx`:
+The `Overall` legend uses:
 
-- add `Unified` as a third tab
-- keep `Offense` and `Defense` tabs unchanged
-- update `countLabel`
-- update slider `aria-label`
-- update empty-state title and description for unified mode
+- a spectrum from red to yellow to green
+- a solid yellow middle band
+- subtle tick marks at the fair-zone boundaries
 
-Recommended copy:
+Because the fair deadband is `±0.3`, the legend visually maps that as:
 
-- count label: `Unified Votes:`
-- empty title: `No strong unified links yet`
-- empty description: explain that the view includes all play responses with at least the selected total vote threshold
+- yellow band from `35%` to `65%`
+- tick marks at those two boundaries
 
-### Phase 5: Render unified link colors
+Legend labels:
 
-The current chart uses CSS tone classes:
+- `Loses`
+- `Fair`
+- `Wins`
 
-- `.matchup-visualizer-link-neutral`
-- `.matchup-visualizer-link-positive`
-- `.matchup-visualizer-link-negative`
+### Fair
 
-For unified mode, move link color to an inline stroke style derived from `edge.colorHex`.
+The `Fair` legend shows:
 
-Recommended approach:
+- yellow swatch
+- label `Fair`
 
-- keep the existing classes for opacity, hover, active, and inactive states
-- set `stroke={link.colorHex}` for unified links
-- preserve CSS-class color handling for the two legacy modes
+### Unfair
 
-This minimizes regression risk.
+The `Unfair` legend shows:
 
-### Phase 6: Decide how node highlighting should behave
+- green swatch with `Wins`
+- red swatch with `Loses`
 
-Current interaction model:
+## Implemented Layout Behavior
 
-- hovering or pinning a source player highlights only outgoing links from that player
-- target nodes are shown as related
+### Desktop
 
-Unified mode can keep that behavior unchanged.
+The chart area uses a two-column layout:
 
-No interaction redesign is required for the first implementation.
+- chart on the left
+- compact settings panel on the right
 
-### Phase 7: Verify live behavior
+### Mobile
 
-Use DevTools on:
+Below the mobile breakpoint, the layout stacks:
 
-- `http://localhost:3000/TCB/matchup-visualizer`
+1. chart
+2. settings panel
 
-Test both:
+This preserves the chart as the primary visual focus.
 
-- `Offense`
-- `Defense`
+## Verification Performed
 
-And all three views:
+### Code-level verification
 
-- `Good Matchup`
-- `Imbalanced`
-- `Unified`
+- `npx tsc --noEmit` passed after implementation changes
 
-## Suggested Implementation Details
+### Live browser verification completed earlier in the implementation
 
-### Helper functions to add in `lib/matchup-visualizer.ts`
+Verified in DevTools:
 
-Recommended helpers:
+- `Overall` tab renders
+- `Offense` and `Defense` both work
+- `Overall` uses a true multi-step gradient, not only the legacy three-tone classes
+- exact yellow links appear in the fair band
+- multiple distinct gradient colors render across the chart
 
-- `normalizeUnifiedColorScore(rawScore: number): number`
-- `interpolateUnifiedMatchupColor(score: number): string`
-- `getUnifiedEdgeTone(score: number): "positive" | "neutral" | "negative"`
+### Data verification
 
-Even though unified rendering will likely use `colorHex` directly, keeping a coarse tone is still helpful for:
+Confirmed from the database:
 
-- analytics
-- testing
-- fallback styling
+- total play rows: `1038`
+- fair / `good_matchup` rows: `415`
+- unfair / imbalanced rows: `623`
 
-### Color interpolation approach
+## Notes
 
-Recommended implementation:
-
-1. Clamp to `[-1, 1]`
-2. If score is negative, interpolate from yellow to red
-3. If score is positive, interpolate from yellow to green
-4. If score is zero, use yellow exactly
-
-This is easy to reason about and stable in tests.
-
-## Testing Plan
-
-### Unit tests
-
-Add coverage for:
-
-- all `win` => green extreme
-- all `lose` => red extreme
-- all `good` => yellow
-- mixed values inside the deadband => yellow
-- mixed values just outside the deadband => slight tint away from yellow
-- unified `count` equals `win + good + lose`
-- offense and defense perspectives invert `win` and `lose` correctly
-
-### Integration tests
-
-Verify API payload shape for:
-
-- `good_matchup`
-- `imbalanced`
-- `unified`
-
-Confirm:
-
-- no regression in existing responses
-- unified edges include the extra fields
-- filter behavior matches the selected threshold semantics
-
-### Manual browser checks
-
-In DevTools:
-
-- confirm `Unified` tab appears
-- confirm link width changes with total vote count
-- confirm yellow links exist for connections within the `-0.2..0.2` band
-- confirm greener links appear as `win` share increases
-- confirm redder links appear as `lose` share increases
-- confirm the same connection can look different in `Offense` vs `Defense`
-- confirm hover and pinned highlighting still work
-
-## Risks
-
-### Risk: filter semantics become inconsistent across tabs
-
-Today the slider means different things in the two existing views already.
-
-Adding unified makes that more noticeable, so the UI copy should be explicit per view.
-
-### Risk: yellow links may dominate visually
-
-Because the deadband includes `-0.2..0.2`, many balanced connections may stay yellow.
-
-That is probably desirable for the first pass, but if the chart feels too neutral we can tighten the band later.
-
-### Risk: current CSS tone classes are too rigid
-
-The current component expects three fixed tones.
-
-Unified should avoid forcing the color model back into those buckets and instead use direct stroke colors.
-
-## Recommended Rollout
-
-1. Add the `Unified` dataset and edge math in the library.
-2. Add the third tab and unified filter/copy in the page.
-3. Render unified links with computed stroke colors.
-4. Run manual checks in DevTools for both perspectives.
-5. Keep existing `Good Matchup` and `Imbalanced` views unchanged unless regressions require small cleanup.
-
-## Clarifying Questions
-
-1. Should `Unified` be added as a third tab, or do you eventually want it to replace `Imbalanced` once we like it?
-2. In unified mode, should the slider label explicitly say `Minimum total votes`, even if the legacy tabs keep their current labels?
+- Internal code still uses `good_matchup` and `imbalanced` for compatibility and because those values map directly to stored result semantics.
+- The page labels intentionally use `Fair` and `Unfair` because they read better in the visualizer UI.
+- The current doc reflects implemented behavior, not just proposal state.

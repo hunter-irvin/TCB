@@ -28,6 +28,7 @@ const CHEMISTRY_COLUMNS: Array<{
 ];
 const ROSTER_MIN_WIDTHS = {
   rowNumber: 28,
+  active: 62,
   playerName: 150,
   positions: 118,
   attribute: 76,
@@ -36,6 +37,7 @@ const ROSTER_MIN_WIDTHS = {
 } as const;
 const ROSTER_EXTRA_WEIGHTS = {
   rowNumber: 0,
+  active: 0,
   playerName: 0.18,
   positions: 0,
   attribute: 1,
@@ -49,6 +51,7 @@ const ATTRIBUTE_COUNT = PLAYER_ATTRIBUTE_GROUPS.reduce(
 const CHEMISTRY_COUNT = CHEMISTRY_COLUMNS.length;
 const ROSTER_MIN_TABLE_WIDTH =
   ROSTER_MIN_WIDTHS.rowNumber +
+  ROSTER_MIN_WIDTHS.active +
   ROSTER_MIN_WIDTHS.playerName +
   ROSTER_MIN_WIDTHS.positions +
   ROSTER_MIN_WIDTHS.attribute * ATTRIBUTE_COUNT +
@@ -56,6 +59,7 @@ const ROSTER_MIN_TABLE_WIDTH =
   ROSTER_MIN_WIDTHS.actions;
 const ROSTER_TOTAL_WEIGHT =
   ROSTER_EXTRA_WEIGHTS.rowNumber +
+  ROSTER_EXTRA_WEIGHTS.active +
   ROSTER_EXTRA_WEIGHTS.playerName +
   ROSTER_EXTRA_WEIGHTS.positions +
   ROSTER_EXTRA_WEIGHTS.attribute * ATTRIBUTE_COUNT +
@@ -80,6 +84,8 @@ function getRosterColumnWidths(containerWidth: number) {
     tableWidth,
     rowNumber:
       ROSTER_MIN_WIDTHS.rowNumber + weightUnit * ROSTER_EXTRA_WEIGHTS.rowNumber,
+    active:
+      ROSTER_MIN_WIDTHS.active + weightUnit * ROSTER_EXTRA_WEIGHTS.active,
     playerName:
       ROSTER_MIN_WIDTHS.playerName + weightUnit * ROSTER_EXTRA_WEIGHTS.playerName,
     positions:
@@ -100,6 +106,7 @@ function areWidthsEqual(
   return (
     previous.tableWidth === next.tableWidth &&
     previous.rowNumber === next.rowNumber &&
+    previous.active === next.active &&
     previous.playerName === next.playerName &&
     previous.positions === next.positions &&
     previous.attribute === next.attribute &&
@@ -218,6 +225,7 @@ function RosterContent() {
     players,
     retrySync,
     syncError,
+    togglePlayerActive,
     togglePlayerPosition,
     updatePlayerAttribute,
     updatePlayerChemistry,
@@ -297,6 +305,7 @@ function RosterContent() {
           <table className="roster-sheet" style={{ width: `${columnWidths.tableWidth}px` }}>
             <colgroup>
               <col className="roster-col row-number" style={{ width: `${columnWidths.rowNumber}px` }} />
+              <col className="roster-col active" style={{ width: `${columnWidths.active}px` }} />
               <col className="roster-col player-name" style={{ width: `${columnWidths.playerName}px` }} />
               <col className="roster-col positions" style={{ width: `${columnWidths.positions}px` }} />
               {PLAYER_ATTRIBUTE_GROUPS.flatMap((group) =>
@@ -319,7 +328,7 @@ function RosterContent() {
             </colgroup>
             <thead>
               <tr>
-                <th className="roster-group-spacer" colSpan={3} />
+                <th className="roster-group-spacer" colSpan={4} />
                 {PLAYER_ATTRIBUTE_GROUPS.map((group) => (
                   <th
                     key={group.label}
@@ -336,6 +345,7 @@ function RosterContent() {
               </tr>
               <tr>
                 <th className="roster-head-cell row-number" aria-label="Row count" />
+                <th className="roster-head-cell active">Active</th>
                 <th className="roster-head-cell name">
                   <button
                     type="button"
@@ -415,12 +425,14 @@ function RosterContent() {
                   key={player.rowNumber}
                   id={player.id}
                   rowNumber={player.rowNumber}
+                  active={player.active}
                   name={player.name}
                   positions={player.positions}
                   attributes={player.attributes}
                   chemistry={player.chemistry}
                   players={players}
                   shouldAutoFocus={player.id === pendingFocusPlayerId}
+                  onActiveToggle={togglePlayerActive}
                   onNameChange={updatePlayerName}
                   onNameBlur={retrySync}
                   onDelete={deletePlayer}
@@ -448,12 +460,14 @@ function RosterContent() {
 function RosterRow({
   id,
   rowNumber,
+  active,
   name,
   positions,
   attributes,
   chemistry,
   players,
   shouldAutoFocus,
+  onActiveToggle,
   onNameChange,
   onNameBlur,
   onDelete,
@@ -463,12 +477,14 @@ function RosterRow({
 }: {
   id: number;
   rowNumber: number;
+  active: boolean;
   name: string;
   positions: Position[];
   attributes: PlayerAttributes;
   chemistry: PlayerChemistry;
   players: Player[];
   shouldAutoFocus: boolean;
+  onActiveToggle: (playerId: number) => void;
   onNameChange: (playerId: number, nextName: string) => void;
   onNameBlur: () => void;
   onDelete: (playerId: number) => void;
@@ -533,18 +549,36 @@ function RosterRow({
     };
   }, [openPanel]);
 
+  useEffect(() => {
+    if (!active && openPanel) {
+      setOpenPanel(null);
+    }
+  }, [active, openPanel]);
+
   return (
-    <tr ref={rowRef} className="roster-row">
+    <tr ref={rowRef} className={`roster-row${active ? "" : " inactive"}`}>
       <td className="roster-rownum">{rowNumber}</td>
+      <td className="roster-active-cell">
+        <label className="roster-active-toggle">
+          <input
+            type="checkbox"
+            className="roster-active-checkbox"
+            aria-label={`Player ${rowNumber} active`}
+            checked={active}
+            onChange={() => onActiveToggle(id)}
+          />
+        </label>
+      </td>
       <td className="roster-name-cell">
         <input
           className="roster-name"
           aria-label={`Player ${rowNumber} name`}
-          autoFocus={shouldAutoFocus}
+          autoFocus={shouldAutoFocus && active}
           value={name}
           onChange={(event) => onNameChange(id, event.target.value)}
           onBlur={onNameBlur}
           placeholder="Enter player name"
+          disabled={!active}
         />
       </td>
       <td className="roster-positions-cell">
@@ -554,14 +588,15 @@ function RosterRow({
           aria-label={`Player ${rowNumber} positions`}
         >
           {POSITIONS.map((position) => {
-            const active = positions.includes(position);
+            const positionActive = positions.includes(position);
             return (
               <button
                 key={position}
                 type="button"
-                className={`multi-pill${active ? " active" : ""}`}
+                className={`multi-pill${positionActive ? " active" : ""}`}
                 onClick={() => onPositionToggle(id, position)}
-                aria-pressed={active}
+                aria-pressed={positionActive}
+                disabled={!active}
               >
                 {position}
               </button>
@@ -582,6 +617,7 @@ function RosterRow({
               className="roster-attribute-select"
               aria-label={`Player ${rowNumber} ${attribute.label}`}
               value={selectValue}
+              disabled={!active}
               onChange={(event) =>
                 onAttributeChange(
                   id,
@@ -634,6 +670,7 @@ function RosterRow({
                 }
                 aria-expanded={openPanel === column.key}
                 aria-label={`${column.label} chemistry for player ${name.trim() || rowNumber}`}
+                disabled={!active}
               >
                 {activeSelection.length}
               </button>
@@ -706,6 +743,7 @@ function RosterRow({
             onClick={() => setOpenPanel((current) => (current === "menu" ? null : "menu"))}
             aria-label={`More actions for player ${name.trim() || rowNumber}`}
             aria-expanded={menuOpen}
+            disabled={!active}
           >
             <span className="roster-menu-dots" aria-hidden="true">
               <span />

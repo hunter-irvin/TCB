@@ -24,6 +24,7 @@ export type MatchupTinderMatchup = {
 type DbMatchupTinderPlayerRow = {
   id: number;
   row_number: number;
+  active?: boolean | null;
   name: string;
 };
 
@@ -41,7 +42,7 @@ export function buildMatchupKey(offensePlayerId: number, defensePlayerId: number
 
 export function matchupTinderPlayersFromRows(rows: DbMatchupTinderPlayerRow[]): MatchupTinderPlayer[] {
   return rows
-    .filter((row) => row.name.trim().length > 0)
+    .filter((row) => row.active !== false && row.name.trim().length > 0)
     .map((row) => ({
       id: row.id,
       rowNumber: row.row_number,

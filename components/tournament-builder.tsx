@@ -60,6 +60,7 @@ type BuilderContextValue = {
   retrySync: () => void;
   addPlayer: () => number | null;
   deletePlayer: (playerId: number) => void;
+  togglePlayerActive: (playerId: number) => void;
   updatePlayerName: (playerId: number, name: string) => void;
   togglePlayerPosition: (playerId: number, position: Position) => void;
   updatePlayerAttribute: (
@@ -82,7 +83,7 @@ const PLAYER_SYNC_DEBOUNCE_MS = 2000;
 
 function canAssignPlayerToSlot(players: Player[], playerId: number, slot: SlotDescriptor): boolean {
   const player = players.find((candidate) => candidate.id === playerId);
-  return Boolean(player && player.positions.includes(slot.position) && player.name.trim());
+  return Boolean(player && player.active && player.positions.includes(slot.position) && player.name.trim());
 }
 
 async function fetchSupabasePlayers(runId: string) {
@@ -632,6 +633,17 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
     [applyPlayerUpdate]
   );
 
+  const togglePlayerActive = useCallback(
+    (playerId: number) => {
+      applyPlayerUpdate((players) =>
+        players.map((player) =>
+          player.id === playerId ? { ...player, active: !player.active } : player
+        )
+      );
+    },
+    [applyPlayerUpdate]
+  );
+
   const togglePlayerPosition = useCallback(
     (playerId: number, position: Position) => {
       applyPlayerUpdate((players) =>
@@ -743,6 +755,7 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
       retrySync,
       addPlayer,
       deletePlayer,
+      togglePlayerActive,
       updatePlayerName,
       togglePlayerPosition,
       updatePlayerAttribute,
@@ -762,6 +775,7 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
       retrySync,
       state,
       syncError,
+      togglePlayerActive,
       togglePlayerPosition,
       updatePlayerAttribute,
       updatePlayerChemistry,

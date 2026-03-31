@@ -63,6 +63,7 @@ export type MatchupVisualizerBundleResponse = {
 type PlayerRow = {
   id: number;
   row_number: number;
+  active?: boolean | null;
   name: string;
 };
 
@@ -92,7 +93,7 @@ export function isMatchupVisualizerView(value: unknown): value is MatchupVisuali
 
 export function matchupVisualizerNodesFromRows(rows: PlayerRow[]): MatchupVisualizerNode[] {
   return rows
-    .filter((row) => row.name.trim().length > 0)
+    .filter((row) => row.active !== false && row.name.trim().length > 0)
     .map((row) => ({
       id: row.id,
       rowNumber: row.row_number,

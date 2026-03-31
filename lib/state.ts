@@ -149,6 +149,7 @@ export function createDefaultPlayers(): Player[] {
   return DEFAULT_PLAYER_SEEDS.map((seed) => ({
     id: seed.rowNumber,
     rowNumber: seed.rowNumber,
+    active: true,
     name: seed.name,
     positions: [...seed.positions],
     attributes: getDefaultPlayerAttributes(seed.rowNumber),
@@ -163,6 +164,7 @@ export function sanitizePlayers(players: Player[]): Player[] {
       ...player,
       id: player.id ?? index + 1,
       rowNumber,
+      active: player.active ?? true,
       name: player.name ?? "",
       positions: [...new Set(player.positions)].sort((a, b) => a - b) as Position[],
       attributes: sanitizePlayerAttributes(player.attributes)
@@ -195,6 +197,7 @@ export function createPlayerDraft(players: Player[]): Player {
   return {
     id: getNextTemporaryPlayerId(players),
     rowNumber,
+    active: true,
     name: "",
     positions: [],
     attributes: createEmptyPlayerAttributes(),
@@ -281,6 +284,10 @@ export function getEligiblePlayers(
   targetPlayerId: number | null
 ): Player[] {
   return players.filter((player) => {
+    if (!player.active) {
+      return false;
+    }
+
     if (!player.name.trim()) {
       return false;
     }
@@ -366,7 +373,7 @@ export function pruneAssignments(players: Player[], assignments: Assignments): A
 
       const player = players.find((candidate) => candidate.id === playerId);
       const stillValid = Boolean(
-        player && player.name.trim() && player.positions.includes(position)
+        player && player.active && player.name.trim() && player.positions.includes(position)
       );
 
       if (!stillValid) {

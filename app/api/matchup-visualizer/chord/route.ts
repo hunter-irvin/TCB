@@ -7,7 +7,7 @@ import {
 import { hasSupabasePublicConfig } from "@/lib/supabase/config";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
-const PLAYER_SELECT_COLUMNS = "id,row_number,name";
+const PLAYER_SELECT_COLUMNS = "id,row_number,active,name";
 const RESPONSE_SELECT_COLUMNS = "offense_player_id,defense_player_id,result";
 
 export async function GET() {
@@ -22,7 +22,11 @@ export async function GET() {
 
   const [{ data: playerRows, error: playerError }, { data: responseRows, error: responseError }] =
     await Promise.all([
-      supabase.from("players").select(PLAYER_SELECT_COLUMNS).order("row_number", { ascending: true }),
+      supabase
+        .from("players")
+        .select(PLAYER_SELECT_COLUMNS)
+        .eq("active", true)
+        .order("row_number", { ascending: true }),
       supabase
         .from("matchup_tinder_responses")
         .select(RESPONSE_SELECT_COLUMNS)

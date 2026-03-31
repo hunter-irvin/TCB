@@ -10,7 +10,7 @@ import {
 import { hasSupabasePublicConfig } from "@/lib/supabase/config";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
-const MATCHUP_TINDER_PLAYER_SELECT_COLUMNS = "id,row_number,name";
+const MATCHUP_TINDER_PLAYER_SELECT_COLUMNS = "id,row_number,active,name";
 
 type MatchupTinderRespondRequest = {
   offensePlayerId?: number;
@@ -63,6 +63,7 @@ export async function POST(request: NextRequest) {
   const { data, error: playersError } = await supabase
     .from("players")
     .select(MATCHUP_TINDER_PLAYER_SELECT_COLUMNS)
+    .eq("active", true)
     .order("row_number", { ascending: true });
 
   if (playersError) {

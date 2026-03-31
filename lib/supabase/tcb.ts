@@ -15,6 +15,7 @@ type DbPlayerRow = {
   id: number;
   run_id?: string;
   row_number: number;
+  active: boolean | null;
   name: string;
   eligible_positions: number[] | null;
   shooting: number | null;
@@ -38,7 +39,7 @@ export type DbPlayerChemistryRow = {
 export type DbPlayerInsertRow = Omit<DbPlayerRow, "id">;
 
 export const PLAYER_SELECT_COLUMNS =
-  "id,run_id,row_number,name,eligible_positions,shooting,driving,assisting,man_defense,help_defense,shot_blocking,playmaking,rebounding,transition";
+  "id,run_id,row_number,active,name,eligible_positions,shooting,driving,assisting,man_defense,help_defense,shot_blocking,playmaking,rebounding,transition";
 export const PLAYER_CHEMISTRY_SELECT_COLUMNS = "run_id,source_player_id,target_player_id,kind";
 export const TEAM_SELECT_COLUMNS = "id,run_id,name,color,display_order";
 export const TEAM_SCENARIO_SELECT_COLUMNS = "id,run_id,title,sort_order";
@@ -162,6 +163,7 @@ export function playerFromRow(
   return {
     id: row.id,
     rowNumber: row.row_number,
+    active: row.active ?? true,
     name: row.name,
     positions: normalizePositions(row.eligible_positions),
     attributes: {
@@ -190,6 +192,7 @@ export function playerToInsertRow(player: Player, runId: string): DbPlayerInsert
   return {
     run_id: runId,
     row_number: player.rowNumber,
+    active: player.active,
     name: player.name,
     eligible_positions: player.positions,
     shooting: player.attributes.shooting,
@@ -361,6 +364,7 @@ export function isSamePlayer(left: Player, right: Player) {
   return (
     left.id === right.id &&
     left.rowNumber === right.rowNumber &&
+    left.active === right.active &&
     left.name === right.name &&
     JSON.stringify(left.positions) === JSON.stringify(right.positions) &&
     JSON.stringify(left.attributes) === JSON.stringify(right.attributes) &&

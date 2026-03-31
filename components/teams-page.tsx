@@ -467,7 +467,7 @@ function getPlayerPoolName(player: Player) {
 }
 
 function canPlayerAppearInPool(player: Player) {
-  return Boolean(player.name.trim());
+  return player.active && Boolean(player.name.trim());
 }
 
 function canPlayerBeAssignedFromPool(player: Player) {
@@ -749,6 +749,7 @@ function TeamsContent() {
   } | null>(null);
   const [poolDropScenarioId, setPoolDropScenarioId] = useState<string | null>(null);
   const [scenarioReorder, setScenarioReorder] = useState<ScenarioReorderState | null>(null);
+  const [scenarioPendingDeleteId, setScenarioPendingDeleteId] = useState<string | null>(null);
 
   const playerById = useMemo(
     () => new Map(players.map((player) => [player.id, player])),
@@ -1439,13 +1440,17 @@ function TeamsContent() {
         return scenario;
       });
 
+      if (dirtyScenarioIds.length === 0) {
+        return current;
+      }
+
       if (dirtyScenarioIds.length > 0) {
         queueScenarioAssignmentsSync(nextScenarios, dirtyScenarioIds);
       }
 
       return nextScenarios;
     });
-  }, [loading, players, queueScenarioAssignmentsSync]);
+  }, [loading, players, queueScenarioAssignmentsSync, scenarios]);
 
   useEffect(() => {
     if (!hasSupabaseBrowserConfig()) {
@@ -1991,7 +1996,7 @@ function TeamsContent() {
 
   const assignPlayerToScenarioSlot = (scenarioId: string, playerId: number, slot: SlotDescriptor) => {
     const player = playerById.get(playerId);
-    if (!player || !player.name.trim() || !player.positions.includes(slot.position)) {
+    if (!player || !player.active || !player.name.trim() || !player.positions.includes(slot.position)) {
       return;
     }
 
@@ -2111,6 +2116,57 @@ function TeamsContent() {
     setOpenPickerSlot(null);
     setSelectedAvailablePlayer(null);
   };
+
+  const promptDeleteScenario = useCallback((scenarioId: string) => {
+    if (dragState || scenarioReorder) {
+      return;
+    }
+
+    setScenarioPendingDeleteId(scenarioId);
+  }, [dragState, scenarioReorder]);
+
+  const confirmDeleteScenario = useCallback(() => {
+    if (!scenarioPendingDeleteId) {
+      return;
+    }
+
+    const deletedScenarioId = scenarioPendingDeleteId;
+    setScenarioPendingDeleteId(null);
+    setOpenPickerSlot((current) => (current?.scenarioId === deletedScenarioId ? null : current));
+    setSelectedAvailablePlayer((current) =>
+      current?.scenarioId === deletedScenarioId ? null : current
+    );
+    setNearestSlot((current) => (current?.scenarioId === deletedScenarioId ? null : current));
+    setPreviewTarget((current) => (current?.scenarioId === deletedScenarioId ? null : current));
+    previewTargetRef.current =
+      previewTargetRef.current?.scenarioId === deletedScenarioId ? null : previewTargetRef.current;
+    setPoolDropScenarioId((current) => (current === deletedScenarioId ? null : current));
+    poolHoverRef.current = poolHoverRef.current === deletedScenarioId ? null : poolHoverRef.current;
+
+    setScenarios((current) => {
+      const nextScenarios = current.filter((scenario) => scenario.id !== deletedScenarioId);
+      queueScenarioMetaSync(nextScenarios, { immediate: true });
+      queueScenarioAssignmentsSync(nextScenarios, [deletedScenarioId], { immediate: true });
+      return nextScenarios;
+    });
+  }, [queueScenarioAssignmentsSync, queueScenarioMetaSync, scenarioPendingDeleteId]);
+
+  useEffect(() => {
+    if (!scenarioPendingDeleteId) {
+      return undefined;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setScenarioPendingDeleteId(null);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [scenarioPendingDeleteId]);
 
   useEffect(() => {
     if (!scenarioReorder) {
@@ -2484,6 +2540,7 @@ function TeamsContent() {
           );
           const scenarioCollapsed = Boolean(scenarioReorder) || scenario.collapsed;
           const scenarioIsDragging = scenarioReorder?.scenarioId === scenario.id;
+          const deleteModalOpen = scenarioPendingDeleteId === scenario.id;
 
           return (
             <section
@@ -2497,95 +2554,121 @@ function TeamsContent() {
               }}
               className={`panel board-shell${scenarioCollapsed ? " collapsed" : ""}${scenarioIsDragging ? " scenario-drag-placeholder" : ""}`}
             >
-              <div
-                className="scenario-header"
-                onMouseDown={(event) => {
-                  if (dragState || scenarioReorder || event.button !== 0) {
-                    return;
-                  }
-
-                  const sectionNode = event.currentTarget.closest(".board-shell");
-                  if (!(sectionNode instanceof HTMLElement)) {
-                    return;
-                  }
-
-                  event.preventDefault();
-
-                  const interactionTarget = event.target as HTMLElement;
-                  const toggleButton = interactionTarget.closest(".scenario-toggle");
-                  const titleInput = interactionTarget.closest(".scenario-title-input");
-                  const startX = event.clientX;
-                  const startY = event.clientY;
-                  let dragging = false;
-
-                  const handleMove = (moveEvent: MouseEvent) => {
-                    const moved =
-                      Math.abs(moveEvent.clientX - startX) > 4 ||
-                      Math.abs(moveEvent.clientY - startY) > 4;
-
-                    if (!moved || dragging) {
-                      return;
-                    }
-
-                    dragging = true;
-                    cleanup();
-                    beginScenarioReorder(scenario.id, sectionNode, {
-                      x: moveEvent.clientX,
-                      y: moveEvent.clientY
-                    });
-                  };
-
-                  const handleUp = () => {
-                    cleanup();
-
-                    if (dragging) {
-                      return;
-                    }
-
-                    if (toggleButton) {
-                      toggleScenarioCollapsed(scenario.id);
-                      return;
-                    }
-
-                    if (titleInput instanceof HTMLInputElement) {
-                      titleInput.focus();
-                      const length = titleInput.value.length;
-                      titleInput.setSelectionRange(length, length);
-                    }
-                  };
-
-                  const cleanup = () => {
-                    window.removeEventListener("mousemove", handleMove);
-                    window.removeEventListener("mouseup", handleUp);
-                  };
-
-                  window.addEventListener("mousemove", handleMove);
-                  window.addEventListener("mouseup", handleUp, { once: true });
-                }}
-              >
-                <input
-                  type="text"
-                  className="scenario-title-input"
-                  value={scenario.title}
-                  onChange={(event) => updateScenarioTitle(scenario.id, event.target.value)}
-                  onBlur={(event) =>
-                    updateScenarioTitle(scenario.id, event.target.value, { immediate: true })
-                  }
-                  aria-label={`Scenario title for ${scenario.title || "scenario"}`}
-                  placeholder="Team Scenario"
-                  spellCheck={false}
-                />
+              <div className="scenario-header">
                 <button
                   type="button"
-                  className={`scenario-toggle${scenarioCollapsed ? " collapsed" : ""}`}
-                  aria-label={scenarioCollapsed ? "Expand scenario" : "Collapse scenario"}
-                  aria-expanded={!scenarioCollapsed}
-                  tabIndex={scenarioReorder ? -1 : 0}
-                >
-                  <span className="scenario-toggle-icon" aria-hidden="true" />
-                </button>
+                  className="scenario-drag-handle"
+                  aria-label={`Reorder ${scenario.title || "scenario"}`}
+                  disabled={Boolean(dragState) || Boolean(scenarioReorder) || deleteModalOpen}
+                  onMouseDown={(event) => {
+                    if (dragState || scenarioReorder || event.button !== 0) {
+                      return;
+                    }
+
+                    const sectionNode = event.currentTarget.closest(".board-shell");
+                    if (!(sectionNode instanceof HTMLElement)) {
+                      return;
+                    }
+
+                    event.preventDefault();
+
+                    const startX = event.clientX;
+                    const startY = event.clientY;
+                    let dragging = false;
+
+                    const handleMove = (moveEvent: MouseEvent) => {
+                      const moved =
+                        Math.abs(moveEvent.clientX - startX) > 4 ||
+                        Math.abs(moveEvent.clientY - startY) > 4;
+
+                      if (!moved || dragging) {
+                        return;
+                      }
+
+                      dragging = true;
+                      cleanup();
+                      beginScenarioReorder(scenario.id, sectionNode, {
+                        x: moveEvent.clientX,
+                        y: moveEvent.clientY
+                      });
+                    };
+
+                    const handleUp = () => {
+                      cleanup();
+                    };
+
+                    const cleanup = () => {
+                      window.removeEventListener("mousemove", handleMove);
+                      window.removeEventListener("mouseup", handleUp);
+                    };
+
+                    window.addEventListener("mousemove", handleMove);
+                    window.addEventListener("mouseup", handleUp, { once: true });
+                  }}
+                />
+                <div className="scenario-header-main">
+                  <input
+                    type="text"
+                    className="scenario-title-input"
+                    value={scenario.title}
+                    onChange={(event) => updateScenarioTitle(scenario.id, event.target.value)}
+                    onBlur={(event) =>
+                      updateScenarioTitle(scenario.id, event.target.value, { immediate: true })
+                    }
+                    aria-label={`Scenario title for ${scenario.title || "scenario"}`}
+                    placeholder="Team Scenario"
+                    spellCheck={false}
+                    disabled={deleteModalOpen}
+                  />
+                  <div className="scenario-header-actions">
+                    <button
+                      type="button"
+                      className="scenario-delete-button"
+                      aria-label={`Delete ${scenario.title || "scenario"}`}
+                      onClick={() => promptDeleteScenario(scenario.id)}
+                      disabled={Boolean(dragState) || Boolean(scenarioReorder) || deleteModalOpen}
+                    >
+                      <svg
+                        className="scenario-delete-icon"
+                        aria-hidden="true"
+                        viewBox="0 0 16 16"
+                        fill="none"
+                      >
+                        <path
+                          d="M3.5 4.5h9"
+                          stroke="currentColor"
+                          strokeWidth="1.5"
+                          strokeLinecap="round"
+                        />
+                        <path
+                          d="M6 2.75h4"
+                          stroke="currentColor"
+                          strokeWidth="1.5"
+                          strokeLinecap="round"
+                        />
+                        <path
+                          d="M5 5.25v6.1c0 .64.52 1.15 1.15 1.15h3.7c.64 0 1.15-.52 1.15-1.15v-6.1"
+                          stroke="currentColor"
+                          strokeWidth="1.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      className={`scenario-toggle${scenarioCollapsed ? " collapsed" : ""}`}
+                      aria-label={scenarioCollapsed ? "Expand scenario" : "Collapse scenario"}
+                      aria-expanded={!scenarioCollapsed}
+                      tabIndex={scenarioReorder ? -1 : 0}
+                      onClick={() => toggleScenarioCollapsed(scenario.id)}
+                      disabled={deleteModalOpen}
+                    >
+                      <span className="scenario-toggle-icon" aria-hidden="true" />
+                    </button>
+                  </div>
+                </div>
               </div>
-              <div className="scenario-title-rule" aria-hidden="true" />
               <div className="scenario-body" aria-hidden={scenarioCollapsed}>
                 <div className="scenario-body-inner">
                   <div
@@ -2801,9 +2884,79 @@ function TeamsContent() {
               }}
             >
               <div className="scenario-header">
-                <div className="scenario-title-input">{scenarioById.get(scenarioReorder.scenarioId)?.title}</div>
-                <div className="scenario-toggle collapsed" aria-hidden="true" tabIndex={-1}>
-                  <span className="scenario-toggle-icon" />
+                <div className="scenario-drag-handle" aria-hidden="true" />
+                <div className="scenario-header-main">
+                  <div className="scenario-title-input">
+                    {scenarioById.get(scenarioReorder.scenarioId)?.title}
+                  </div>
+                  <div className="scenario-header-actions">
+                    <div className="scenario-delete-button" aria-hidden="true" tabIndex={-1}>
+                      <svg className="scenario-delete-icon" viewBox="0 0 16 16" fill="none">
+                        <path
+                          d="M3.5 4.5h9"
+                          stroke="currentColor"
+                          strokeWidth="1.5"
+                          strokeLinecap="round"
+                        />
+                        <path
+                          d="M6 2.75h4"
+                          stroke="currentColor"
+                          strokeWidth="1.5"
+                          strokeLinecap="round"
+                        />
+                        <path
+                          d="M5 5.25v6.1c0 .64.52 1.15 1.15 1.15h3.7c.64 0 1.15-.52 1.15-1.15v-6.1"
+                          stroke="currentColor"
+                          strokeWidth="1.5"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    </div>
+                    <div className="scenario-toggle collapsed" aria-hidden="true" tabIndex={-1}>
+                      <span className="scenario-toggle-icon" />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>,
+            document.body
+          )
+        : null}
+      {scenarioPendingDeleteId
+        ? createPortal(
+            <div
+              className="matchup-tinder-modal-backdrop"
+              role="presentation"
+              onClick={() => setScenarioPendingDeleteId(null)}
+            >
+              <div
+                className="matchup-tinder-modal"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="scenario-delete-title"
+                aria-describedby="scenario-delete-copy"
+                onClick={(event) => event.stopPropagation()}
+              >
+                <h2 id="scenario-delete-title">Delete this scenario?</h2>
+                <p id="scenario-delete-copy">
+                  This will permanently remove the scenario and all of its team assignments.
+                </p>
+                <div className="matchup-tinder-modal-actions">
+                  <button
+                    type="button"
+                    className="matchup-tinder-modal-button secondary"
+                    onClick={() => setScenarioPendingDeleteId(null)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="matchup-tinder-modal-button primary"
+                    onClick={confirmDeleteScenario}
+                  >
+                    Delete Scenario
+                  </button>
                 </div>
               </div>
             </div>,

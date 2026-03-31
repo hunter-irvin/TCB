@@ -23,6 +23,7 @@ export type PlayerChemistry = Record<PlayerChemistryKind, number[]>;
 export type Player = {
   id: number;
   rowNumber: number;
+  active: boolean;
   name: string;
   positions: Position[];
   attributes: PlayerAttributes;
