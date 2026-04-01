@@ -89,9 +89,57 @@ type ScenarioReorderState = {
   insertIndex: number;
 };
 
+type ScenarioActionState = {
+  scenarioId: string;
+  mode: "randomize" | "balanceOverall" | "balanceCategories";
+};
+
+type ScenarioActionSummary = {
+  generatedCount: number;
+  mode: "randomize" | "balanceOverall" | "balanceCategories";
+  candidates: Assignments[];
+  currentIndex: number;
+};
+
+type TeamBalanceTotals = {
+  offense: number;
+  defense: number;
+  misc: number;
+};
+
+type BalanceSelectionMode = "overall" | "categories";
+type ScenarioActionMode = ScenarioActionState["mode"];
+
+type ScenarioHistoryEntry = {
+  assignments: Assignments;
+  summary: ScenarioActionSummary | null;
+};
+
+type ScenarioGenerationResult = {
+  assignments: Assignments;
+  generatedCount: number;
+  candidates: Assignments[];
+};
+
+type GeneratedScenarioCandidate = {
+  assignments: Assignments;
+  signature: string;
+  filledCount: number;
+  categoryScore: number;
+  overallRangeScore: number;
+  overallScore: number;
+};
+
 type StartDragFn = (playerId: number, chipNode: HTMLDivElement) => void;
 const SCENARIO_SYNC_DEBOUNCE_MS = 2000;
 const TEAM_COLOR_SCENARIO_COMMIT_DELAY_MS = 120;
+const SCENARIO_ACTION_PROGRESS_MS = 2000;
+const REMAINING_ASSIGNMENT_ATTEMPTS = 25;
+const BALANCED_ASSIGNMENT_MIN_FULL_ROSTERS = 100;
+const BALANCED_ASSIGNMENT_MAX_ATTEMPTS =
+  REMAINING_ASSIGNMENT_ATTEMPTS * BALANCED_ASSIGNMENT_MIN_FULL_ROSTERS;
+const MAX_SCENARIO_UNDO_STEPS = 15;
+const OVERALL_BALANCE_RANGE_FINALIST_COUNT = 10;
 
 type TeamDraft = {
   name: string;
@@ -106,19 +154,19 @@ type TeamAttributeStack = {
 
 type ScenarioAttributeChart = {
   label: string;
-  tone: "offense" | "defense" | "misc";
+  tone: "overall" | "offense" | "defense" | "misc";
   maxTotal: number;
   stacks: TeamAttributeStack[];
 };
 
 type ScenarioChartSegment = {
-  key: PlayerAttributeKey | "chemistry";
+  key: PlayerAttributeKey | "chemistry" | "overallOffense" | "overallDefense" | "overallMisc";
   label: string;
   value: number;
-  variant: "attribute" | "chemistry";
+  variant: "attribute" | "chemistry" | "overall";
 };
 
-const SCENARIO_CHART_MAX_TOTAL = 75;
+const SCENARIO_CHART_TOP_PADDING = 10;
 const TEAM_SYNC_DEBOUNCE_MS = 1000;
 
 function roundChartValue(value: number) {
@@ -136,7 +184,7 @@ function getTeamDisplayName(team: Team, index: number) {
 
 function buildTeamChemistryBonusTotal(
   assignments: Assignments,
-  playersById: Map<number, Player>,
+  playersById: ReadonlyMap<number, Player>,
   teamId: string
 ) {
   const teamPlayerIds = new Set(
@@ -172,7 +220,45 @@ function buildScenarioAttributeCharts(
   playersById: Map<number, Player>,
   teams: Team[]
 ): ScenarioAttributeChart[] {
-  return PLAYER_ATTRIBUTE_GROUPS.map((group) => {
+  const overallStacks = buildTeamBalanceTotals(assignments, playersById, teams).map((totals, index) => {
+      const team = teams[index];
+      const segments: ScenarioChartSegment[] = [
+        {
+          key: "overallOffense",
+          label: "Offense",
+          value: roundChartValue(totals.offense),
+          variant: "overall"
+        },
+        {
+          key: "overallDefense",
+          label: "Defense",
+          value: roundChartValue(totals.defense),
+          variant: "overall"
+        },
+        {
+          key: "overallMisc",
+          label: "Misc",
+          value: roundChartValue(totals.misc),
+          variant: "overall"
+        }
+      ];
+
+      return {
+        team,
+        total: roundChartValue(totals.offense + totals.defense + totals.misc),
+        segments
+      };
+    });
+
+  const overallChart: ScenarioAttributeChart = {
+    label: "Overall",
+    tone: "overall",
+    maxTotal:
+      Math.max(...overallStacks.map((stack) => stack.total), 0) + SCENARIO_CHART_TOP_PADDING,
+    stacks: overallStacks
+  };
+
+  const categoryCharts = PLAYER_ATTRIBUTE_GROUPS.map((group) => {
     const stacks = teams.map((team) => {
       const segments: ScenarioChartSegment[] = group.attributes.map((attribute) => {
         const value = roundChartValue(
@@ -213,10 +299,13 @@ function buildScenarioAttributeCharts(
     return {
       label: group.label,
       tone: group.tone,
-      maxTotal: group.tone === "misc" ? SCENARIO_CHART_MAX_TOTAL + TEAM_CHEMISTRY_MAX_ABS : SCENARIO_CHART_MAX_TOTAL,
+      maxTotal:
+        Math.max(...stacks.map((stack) => stack.total), 0) + SCENARIO_CHART_TOP_PADDING,
       stacks
     };
   });
+
+  return [overallChart, ...categoryCharts];
 }
 
 function getChartTeamLabelLines(name: string) {
@@ -236,7 +325,7 @@ function getChartSegmentColor(teamColor: string, index: number) {
 function getScenarioChartSegmentBackground(
   teamColor: string,
   index: number,
-  variant: "attribute" | "chemistry" | undefined
+  variant: "attribute" | "chemistry" | "overall" | undefined
 ) {
   if (variant === "chemistry") {
     return "var(--chemistry-stack)";
@@ -249,6 +338,54 @@ function cloneAssignments(assignments: Assignments): Assignments {
   return Object.fromEntries(
     Object.entries(assignments).map(([teamId, slots]) => [teamId, { ...slots }])
   );
+}
+
+function cloneScenarioCandidates(candidates: Assignments[]) {
+  return candidates.map((candidate) => cloneAssignments(candidate));
+}
+
+function cloneScenarioActionSummary(summary: ScenarioActionSummary | null) {
+  if (!summary) {
+    return null;
+  }
+
+  return {
+    ...summary,
+    candidates: cloneScenarioCandidates(summary.candidates)
+  };
+}
+
+function areScenarioActionSummariesEqual(
+  left: ScenarioActionSummary | null,
+  right: ScenarioActionSummary | null
+) {
+  if (!left || !right) {
+    return left === right;
+  }
+
+  if (
+    left.generatedCount !== right.generatedCount ||
+    left.mode !== right.mode ||
+    left.currentIndex !== right.currentIndex ||
+    left.candidates.length !== right.candidates.length
+  ) {
+    return false;
+  }
+
+  return left.candidates.every((candidate, index) => {
+    const matchingCandidate = right.candidates[index];
+    return matchingCandidate ? areAssignmentsEqual(candidate, matchingCandidate) : false;
+  });
+}
+
+function getScenarioAssignmentsSignature(assignments: Assignments) {
+  return Object.entries(assignments)
+    .sort(([leftTeamId], [rightTeamId]) => leftTeamId.localeCompare(rightTeamId))
+    .map(
+      ([teamId, slots]) =>
+        `${teamId}:${POSITIONS.map((position) => slots[position] ?? "_").join(",")}`
+    )
+    .join("|");
 }
 
 function reconcileAssignmentsToTeams(assignments: Assignments, teams: Team[]) {
@@ -294,11 +431,25 @@ function countFilledAssignments(assignments: Assignments) {
   );
 }
 
+function buildGeneratedScenarioCandidate(
+  assignments: Assignments,
+  playersById: ReadonlyMap<number, Player>,
+  teams: Team[]
+): GeneratedScenarioCandidate {
+  return {
+    assignments: cloneAssignments(assignments),
+    signature: getScenarioAssignmentsSignature(assignments),
+    filledCount: countFilledAssignments(assignments),
+    categoryScore: getScenarioBalanceScore(assignments, playersById, teams),
+    overallRangeScore: getScenarioOverallRangeScore(assignments, playersById, teams),
+    overallScore: getScenarioOverallBalanceScore(assignments, playersById, teams)
+  };
+}
+
 function randomizeRemainingAssignments(
   assignments: Assignments,
   teams: Team[],
-  availablePlayers: Player[],
-  maxAttempts: number
+  availablePlayers: Player[]
 ) {
   const emptySlots = teams.flatMap((team) =>
     POSITIONS.filter((position) => (assignments[team.id]?.[position] ?? null) === null).map((position) => ({
@@ -311,48 +462,315 @@ function randomizeRemainingAssignments(
     return assignments;
   }
 
-  let bestAssignments = assignments;
-  let bestScore = countFilledAssignments(assignments);
+  const nextAssignments = cloneAssignments(assignments);
+  const remainingPlayers = shuffleArray(availablePlayers);
+  const slotOrder = shuffleArray(emptySlots).sort((left, right) => {
+    const leftCount = availablePlayers.filter((player) => player.positions.includes(left.position)).length;
+    const rightCount = availablePlayers.filter((player) =>
+      player.positions.includes(right.position)
+    ).length;
+    return leftCount - rightCount;
+  });
 
-  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-    const nextAssignments = cloneAssignments(assignments);
-    const remainingPlayers = shuffleArray(availablePlayers);
-    const slotOrder = shuffleArray(emptySlots).sort((left, right) => {
-      const leftCount = availablePlayers.filter((player) => player.positions.includes(left.position)).length;
-      const rightCount = availablePlayers.filter((player) =>
-        player.positions.includes(right.position)
-      ).length;
-      return leftCount - rightCount;
-    });
-
-    for (const slot of slotOrder) {
-      const eligiblePlayers = remainingPlayers.filter((player) => player.positions.includes(slot.position));
-      if (eligiblePlayers.length === 0) {
-        continue;
-      }
-
-      const selectedPlayer =
-        eligiblePlayers[Math.floor(Math.random() * eligiblePlayers.length)] ?? null;
-
-      if (!selectedPlayer) {
-        continue;
-      }
-
-      nextAssignments[slot.teamId][slot.position] = selectedPlayer.id;
-      const selectedIndex = remainingPlayers.findIndex((player) => player.id === selectedPlayer.id);
-      if (selectedIndex >= 0) {
-        remainingPlayers.splice(selectedIndex, 1);
-      }
+  for (const slot of slotOrder) {
+    const eligiblePlayers = remainingPlayers.filter((player) => player.positions.includes(slot.position));
+    if (eligiblePlayers.length === 0) {
+      continue;
     }
 
-    const nextScore = countFilledAssignments(nextAssignments);
-    if (nextScore > bestScore) {
-      bestAssignments = nextAssignments;
-      bestScore = nextScore;
+    const selectedPlayer =
+      eligiblePlayers[Math.floor(Math.random() * eligiblePlayers.length)] ?? null;
+
+    if (!selectedPlayer) {
+      continue;
+    }
+
+    nextAssignments[slot.teamId][slot.position] = selectedPlayer.id;
+    const selectedIndex = remainingPlayers.findIndex((player) => player.id === selectedPlayer.id);
+    if (selectedIndex >= 0) {
+      remainingPlayers.splice(selectedIndex, 1);
     }
   }
 
-  return bestAssignments;
+  return nextAssignments;
+}
+
+function chooseBestRandomizedAssignments(
+  assignments: Assignments,
+  teams: Team[],
+  availablePlayers: Player[],
+  maxAttempts: number,
+  playersById: ReadonlyMap<number, Player>
+): ScenarioGenerationResult {
+  if (availablePlayers.length === 0) {
+    return {
+      assignments,
+      generatedCount: 0,
+      candidates: []
+    };
+  }
+
+  const generatedCandidates = Array.from({ length: maxAttempts }, () =>
+    buildGeneratedScenarioCandidate(
+      randomizeRemainingAssignments(assignments, teams, availablePlayers),
+      playersById,
+      teams
+    )
+  );
+  const bestFilledCount = generatedCandidates.reduce(
+    (best, candidate) => Math.max(best, candidate.filledCount),
+    countFilledAssignments(assignments)
+  );
+  const randomizedCandidates = shuffleArray(
+    [...new Map(
+      generatedCandidates
+        .filter((candidate) => candidate.filledCount === bestFilledCount)
+        .map((candidate) => [candidate.signature, candidate.assignments] as const)
+    ).values()]
+  );
+  const candidates =
+    randomizedCandidates.length > 0 ? randomizedCandidates : [cloneAssignments(assignments)];
+
+  return {
+    assignments: cloneAssignments(candidates[0]),
+    generatedCount: maxAttempts,
+    candidates: cloneScenarioCandidates(candidates)
+  };
+}
+
+function buildTeamBalanceTotals(
+  assignments: Assignments,
+  playersById: ReadonlyMap<number, Player>,
+  teams: Team[]
+) {
+  return teams.map((team) => {
+    const totals: TeamBalanceTotals = {
+      offense: 0,
+      defense: 0,
+      misc: 0
+    };
+
+    for (const position of POSITIONS) {
+      const playerId = assignments[team.id]?.[position] ?? null;
+      const player = playerId ? playersById.get(playerId) ?? null : null;
+
+      if (!player) {
+        continue;
+      }
+
+      totals.offense +=
+        (player.attributes.shooting ?? 0) +
+        (player.attributes.driving ?? 0) +
+        (player.attributes.assisting ?? 0);
+      totals.defense +=
+        (player.attributes.manDefense ?? 0) +
+        (player.attributes.helpDefense ?? 0) +
+        (player.attributes.shotBlocking ?? 0);
+      totals.misc +=
+        (player.attributes.playmaking ?? 0) +
+        (player.attributes.rebounding ?? 0) +
+        (player.attributes.transition ?? 0);
+    }
+
+    totals.misc += buildTeamChemistryBonusTotal(assignments, playersById, team.id);
+    return totals;
+  });
+}
+
+function getPairwiseDifferenceSum(values: number[]) {
+  if (values.length <= 1) {
+    return 0;
+  }
+
+  let sum = 0;
+
+  for (let leftIndex = 0; leftIndex < values.length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < values.length; rightIndex += 1) {
+      sum += Math.abs(values[leftIndex] - values[rightIndex]);
+    }
+  }
+
+  return sum;
+}
+
+function getValueRange(values: number[]) {
+  if (values.length <= 1) {
+    return 0;
+  }
+
+  return Math.max(...values) - Math.min(...values);
+}
+
+function getScenarioBalanceScore(
+  assignments: Assignments,
+  playersById: ReadonlyMap<number, Player>,
+  teams: Team[]
+) {
+  const totals = buildTeamBalanceTotals(assignments, playersById, teams);
+
+  return (
+    getPairwiseDifferenceSum(totals.map((team) => team.offense)) +
+    getPairwiseDifferenceSum(totals.map((team) => team.defense)) +
+    getPairwiseDifferenceSum(totals.map((team) => team.misc))
+  );
+}
+
+function getScenarioOverallBalanceScore(
+  assignments: Assignments,
+  playersById: ReadonlyMap<number, Player>,
+  teams: Team[]
+) {
+  const totals = buildTeamBalanceTotals(assignments, playersById, teams);
+
+  return getPairwiseDifferenceSum(
+    totals.map((team) => team.offense + team.defense + team.misc)
+  );
+}
+
+function getScenarioOverallRangeScore(
+  assignments: Assignments,
+  playersById: ReadonlyMap<number, Player>,
+  teams: Team[]
+) {
+  const totals = buildTeamBalanceTotals(assignments, playersById, teams);
+
+  return getValueRange(totals.map((team) => team.offense + team.defense + team.misc));
+}
+
+function sortBalancedCandidates(
+  candidates: GeneratedScenarioCandidate[],
+  mode: BalanceSelectionMode
+) {
+  if (mode === "overall") {
+    const sortedByRange = candidates
+      .slice()
+      .sort((left, right) => {
+        if (left.filledCount !== right.filledCount) {
+          return right.filledCount - left.filledCount;
+        }
+
+        if (left.overallRangeScore !== right.overallRangeScore) {
+          return left.overallRangeScore - right.overallRangeScore;
+        }
+
+        return left.overallScore - right.overallScore;
+      });
+
+    const finalistCount = Math.min(
+      OVERALL_BALANCE_RANGE_FINALIST_COUNT,
+      sortedByRange.length
+    );
+    const finalists = sortedByRange.slice(0, finalistCount);
+
+    return finalists.sort((left, right) => {
+      if (left.filledCount !== right.filledCount) {
+        return right.filledCount - left.filledCount;
+      }
+
+      if (left.overallScore !== right.overallScore) {
+        return left.overallScore - right.overallScore;
+      }
+
+      return left.overallRangeScore - right.overallRangeScore;
+    });
+  }
+
+  return candidates
+    .slice()
+    .sort((left, right) => {
+      if (left.filledCount !== right.filledCount) {
+        return right.filledCount - left.filledCount;
+      }
+
+      return left.categoryScore - right.categoryScore;
+    });
+}
+
+function dedupeGeneratedCandidates(candidates: GeneratedScenarioCandidate[]) {
+  return [...new Map(candidates.map((candidate) => [candidate.signature, candidate] as const)).values()];
+}
+
+function buildScenarioGenerationResult(
+  generatedCount: number,
+  candidates: GeneratedScenarioCandidate[],
+  fallbackAssignments: Assignments
+): ScenarioGenerationResult {
+  const orderedCandidates =
+    candidates.length > 0
+      ? candidates.map((candidate) => candidate.assignments)
+      : [cloneAssignments(fallbackAssignments)];
+
+  return {
+    assignments: cloneAssignments(orderedCandidates[0]),
+    generatedCount,
+    candidates: cloneScenarioCandidates(orderedCandidates)
+  };
+}
+
+function chooseBestBalancedAssignments(
+  assignments: Assignments,
+  teams: Team[],
+  availablePlayers: Player[],
+  playersById: ReadonlyMap<number, Player>,
+  batchAttempts: number,
+  mode: BalanceSelectionMode
+): ScenarioGenerationResult {
+  if (availablePlayers.length === 0) {
+    return {
+      assignments,
+      generatedCount: 0,
+      candidates: []
+    };
+  }
+
+  const totalSlotCount = teams.length * POSITIONS.length;
+  let totalAttempts = 0;
+  let fullRosterCount = 0;
+  const fullCandidates: GeneratedScenarioCandidate[] = [];
+  const partialCandidates: GeneratedScenarioCandidate[] = [];
+
+  while (
+    totalAttempts < BALANCED_ASSIGNMENT_MAX_ATTEMPTS &&
+    fullRosterCount < BALANCED_ASSIGNMENT_MIN_FULL_ROSTERS
+  ) {
+    const attemptsThisBatch = Math.min(
+      batchAttempts,
+      BALANCED_ASSIGNMENT_MAX_ATTEMPTS - totalAttempts
+    );
+
+    for (let attempt = 0; attempt < attemptsThisBatch; attempt += 1) {
+      const nextCandidate = buildGeneratedScenarioCandidate(
+        randomizeRemainingAssignments(assignments, teams, availablePlayers),
+        playersById,
+        teams
+      );
+
+      if (nextCandidate.filledCount === totalSlotCount) {
+        fullRosterCount += 1;
+        fullCandidates.push(nextCandidate);
+        continue;
+      }
+
+      partialCandidates.push(nextCandidate);
+    }
+
+    totalAttempts += attemptsThisBatch;
+  }
+
+  const orderedFullCandidates = sortBalancedCandidates(
+    dedupeGeneratedCandidates(fullCandidates),
+    mode
+  );
+
+  if (orderedFullCandidates.length > 0) {
+    return buildScenarioGenerationResult(totalAttempts, orderedFullCandidates, assignments);
+  }
+
+  return buildScenarioGenerationResult(
+    totalAttempts,
+    sortBalancedCandidates(dedupeGeneratedCandidates(partialCandidates), mode),
+    assignments
+  );
 }
 
 function getNextTeamDefaultName(teams: Team[]) {
@@ -737,7 +1155,14 @@ function TeamsContent() {
   const [bootstrapSyncRequestVersion, setBootstrapSyncRequestVersion] = useState(0);
   const [teamSyncError, setTeamSyncError] = useState<string | null>(null);
   const [scenarioSyncError, setScenarioSyncError] = useState<string | null>(null);
-  const [randomizingScenarioId, setRandomizingScenarioId] = useState<string | null>(null);
+  const [scenarioActionState, setScenarioActionState] = useState<ScenarioActionState | null>(null);
+  const [scenarioActionSummaries, setScenarioActionSummaries] = useState<
+    Record<string, ScenarioActionSummary | null>
+  >({});
+  const scenarioActionSummariesRef = useRef<Record<string, ScenarioActionSummary | null>>({});
+  const [scenarioUndoStacks, setScenarioUndoStacks] = useState<
+    Record<string, ScenarioHistoryEntry[]>
+  >({});
   const [nearestSlot, setNearestSlot] = useState<NearestSlot>(null);
   const [animatedSlots, setAnimatedSlots] = useState<string[]>([]);
   const [dragState, setDragState] = useState<DragState | null>(null);
@@ -793,6 +1218,34 @@ function TeamsContent() {
 
   useEffect(() => {
     latestScenariosRef.current = scenarios;
+  }, [scenarios]);
+
+  useEffect(() => {
+    scenarioActionSummariesRef.current = scenarioActionSummaries;
+  }, [scenarioActionSummaries]);
+
+  useEffect(() => {
+    const validScenarioIds = new Set(scenarios.map((scenario) => scenario.id));
+
+    setScenarioActionSummaries((current) => {
+      const nextEntries = Object.entries(current).filter(([scenarioId]) =>
+        validScenarioIds.has(scenarioId)
+      );
+
+      return nextEntries.length === Object.keys(current).length
+        ? current
+        : Object.fromEntries(nextEntries);
+    });
+
+    setScenarioUndoStacks((current) => {
+      const nextEntries = Object.entries(current).filter(([scenarioId]) =>
+        validScenarioIds.has(scenarioId)
+      );
+
+      return nextEntries.length === Object.keys(current).length
+        ? current
+        : Object.fromEntries(nextEntries);
+    });
   }, [scenarios]);
 
   const syncTeamRefFromSnapshot = useCallback((snapshot: Team[]) => {
@@ -1963,6 +2416,164 @@ function TeamsContent() {
     });
   };
 
+  const setScenarioActionSummary = useCallback(
+    (scenarioId: string, summary: ScenarioActionSummary | null) => {
+      setScenarioActionSummaries((current) => {
+        const currentSummary = current[scenarioId] ?? null;
+        const nextSummary = cloneScenarioActionSummary(summary);
+
+        if (areScenarioActionSummariesEqual(currentSummary, nextSummary)) {
+          return current;
+        }
+
+        return {
+          ...current,
+          [scenarioId]: nextSummary
+        };
+      });
+    },
+    []
+  );
+
+  const pushScenarioUndoSnapshot = useCallback((scenarioId: string) => {
+    const scenario = latestScenariosRef.current.find((candidate) => candidate.id === scenarioId);
+    if (!scenario) {
+      return;
+    }
+
+    const nextEntry: ScenarioHistoryEntry = {
+      assignments: cloneAssignments(scenario.assignments),
+      summary: cloneScenarioActionSummary(scenarioActionSummariesRef.current[scenarioId] ?? null)
+    };
+
+    setScenarioUndoStacks((current) => {
+      const existingEntries = current[scenarioId] ?? [];
+      const previousEntry = existingEntries[existingEntries.length - 1] ?? null;
+
+      if (
+        previousEntry &&
+        areAssignmentsEqual(previousEntry.assignments, nextEntry.assignments) &&
+        areScenarioActionSummariesEqual(previousEntry.summary, nextEntry.summary)
+      ) {
+        return current;
+      }
+
+      return {
+        ...current,
+        [scenarioId]: [...existingEntries, nextEntry].slice(-MAX_SCENARIO_UNDO_STEPS)
+      };
+    });
+  }, []);
+
+  const applyScenarioAssignmentsChange = useCallback(
+    (
+      scenarioId: string,
+      updater: (assignments: Assignments) => Assignments,
+      options?: { summary?: ScenarioActionSummary | null }
+    ) => {
+      const scenario = latestScenariosRef.current.find((candidate) => candidate.id === scenarioId);
+      if (!scenario) {
+        return false;
+      }
+
+      const currentAssignments = scenario.assignments;
+      const nextAssignments = updater(currentAssignments);
+      const currentSummary = scenarioActionSummariesRef.current[scenarioId] ?? null;
+      const nextSummary =
+        options && "summary" in options ? options.summary ?? null : currentSummary;
+
+      if (
+        areAssignmentsEqual(currentAssignments, nextAssignments) &&
+        areScenarioActionSummariesEqual(currentSummary, nextSummary)
+      ) {
+        return false;
+      }
+
+      pushScenarioUndoSnapshot(scenarioId);
+      setOpenPickerSlot((current) => (current?.scenarioId === scenarioId ? null : current));
+      setSelectedAvailablePlayer((current) => (current?.scenarioId === scenarioId ? null : current));
+      setScenarioActionSummary(scenarioId, nextSummary);
+      updateScenarioAssignments(scenarioId, () => cloneAssignments(nextAssignments));
+      return true;
+    },
+    [pushScenarioUndoSnapshot, setScenarioActionSummary]
+  );
+
+  const restoreScenarioHistoryEntry = useCallback(
+    (scenarioId: string, entry: ScenarioHistoryEntry) => {
+      setOpenPickerSlot((current) => (current?.scenarioId === scenarioId ? null : current));
+      setSelectedAvailablePlayer((current) => (current?.scenarioId === scenarioId ? null : current));
+      setScenarioActionSummary(scenarioId, entry.summary);
+      updateScenarioAssignments(scenarioId, () => cloneAssignments(entry.assignments));
+    },
+    [setScenarioActionSummary]
+  );
+
+  const undoScenarioAssignments = useCallback(
+    (scenarioId: string) => {
+      let entryToRestore: ScenarioHistoryEntry | null = null;
+
+      setScenarioUndoStacks((current) => {
+        const existingEntries = current[scenarioId] ?? [];
+        if (existingEntries.length === 0) {
+          return current;
+        }
+
+        entryToRestore = existingEntries[existingEntries.length - 1] ?? null;
+        return {
+          ...current,
+          [scenarioId]: existingEntries.slice(0, -1)
+        };
+      });
+
+      if (!entryToRestore) {
+        return;
+      }
+
+      restoreScenarioHistoryEntry(scenarioId, entryToRestore);
+    },
+    [restoreScenarioHistoryEntry]
+  );
+
+  const beginScenarioAction = useCallback(
+    (
+      scenarioId: string,
+      mode: ScenarioActionMode,
+      computeResult: () => ScenarioGenerationResult,
+      onComplete?: (result: ScenarioGenerationResult) => void
+    ) => {
+      setScenarioActionState({
+        scenarioId,
+        mode
+      });
+      setOpenPickerSlot(null);
+      setSelectedAvailablePlayer((current) => (current?.scenarioId === scenarioId ? null : current));
+
+      window.setTimeout(() => {
+        const startedAt = performance.now();
+        const result = computeResult();
+        const elapsed = performance.now() - startedAt;
+        const remainingDelay = Math.max(0, SCENARIO_ACTION_PROGRESS_MS - elapsed);
+
+        window.setTimeout(() => {
+          applyScenarioAssignmentsChange(scenarioId, () => result.assignments, {
+            summary: {
+              generatedCount: result.generatedCount,
+              mode,
+              candidates: result.candidates,
+              currentIndex: 0
+            }
+          });
+          onComplete?.(result);
+          setScenarioActionState((current) =>
+            current?.scenarioId === scenarioId && current.mode === mode ? null : current
+          );
+        }, remainingDelay);
+      }, 0);
+    },
+    [applyScenarioAssignmentsChange]
+  );
+
   const updateScenarioTitle = (
     scenarioId: string,
     title: string,
@@ -2000,21 +2611,23 @@ function TeamsContent() {
       return;
     }
 
-    updateScenarioAssignments(scenarioId, (assignments) => assignPlayerToSlot(assignments, playerId, slot));
+    applyScenarioAssignmentsChange(scenarioId, (assignments) =>
+      assignPlayerToSlot(assignments, playerId, slot)
+    );
   };
 
   const clearScenarioSlot = (scenarioId: string, slot: SlotDescriptor) => {
-    updateScenarioAssignments(scenarioId, (assignments) => clearSlot(assignments, slot));
+    applyScenarioAssignmentsChange(scenarioId, (assignments) => clearSlot(assignments, slot));
   };
 
   const resetScenarioAssignments = (scenarioId: string) => {
-    setOpenPickerSlot(null);
-    setSelectedAvailablePlayer((current) => (current?.scenarioId === scenarioId ? null : current));
-    updateScenarioAssignments(scenarioId, () => createEmptyAssignments(teams));
+    applyScenarioAssignmentsChange(scenarioId, () => createEmptyAssignments(teams), {
+      summary: null
+    });
   };
 
   const randomizeScenarioRemainingPlayers = (scenarioId: string) => {
-    if (randomizingScenarioId) {
+    if (scenarioActionState) {
       return;
     }
 
@@ -2034,17 +2647,82 @@ function TeamsContent() {
       return;
     }
 
-    setRandomizingScenarioId(scenarioId);
-    setOpenPickerSlot(null);
-    setSelectedAvailablePlayer((current) => (current?.scenarioId === scenarioId ? null : current));
-
-    window.setTimeout(() => {
-      updateScenarioAssignments(scenarioId, (assignments) =>
-        randomizeRemainingAssignments(assignments, teams, availablePlayers, 15)
-      );
-      setRandomizingScenarioId((current) => (current === scenarioId ? null : current));
-    }, 0);
+    beginScenarioAction(
+      scenarioId,
+      "randomize",
+      () =>
+        chooseBestRandomizedAssignments(
+          scenario.assignments,
+          teams,
+          availablePlayers,
+          REMAINING_ASSIGNMENT_ATTEMPTS,
+          playerById
+        )
+    );
   };
+
+  const runBalancedScenarioRemainingPlayers = (
+    scenarioId: string,
+    mode: BalanceSelectionMode
+  ) => {
+    if (scenarioActionState) {
+      return;
+    }
+
+    const scenario = scenarioById.get(scenarioId);
+    const availablePlayers = (availablePlayersByScenario.get(scenarioId) ?? []).filter(
+      canPlayerBeAssignedFromPool
+    );
+    if (!scenario || availablePlayers.length === 0) {
+      return;
+    }
+
+    const hasEmptySlot = teams.some((team) =>
+      POSITIONS.some((position) => (scenario.assignments[team.id]?.[position] ?? null) === null)
+    );
+
+    if (!hasEmptySlot) {
+      return;
+    }
+
+    const actionMode = mode === "overall" ? "balanceOverall" : "balanceCategories";
+    beginScenarioAction(
+      scenarioId,
+      actionMode,
+      () =>
+        chooseBestBalancedAssignments(
+          scenario.assignments,
+          teams,
+          availablePlayers,
+          playerById,
+          REMAINING_ASSIGNMENT_ATTEMPTS,
+          mode
+        )
+    );
+  };
+
+  const showNextGeneratedScenario = useCallback(
+    (scenarioId: string) => {
+      const summary = scenarioActionSummariesRef.current[scenarioId] ?? null;
+      if (!summary || summary.currentIndex >= summary.candidates.length - 1) {
+        return;
+      }
+
+      const nextIndex = summary.currentIndex + 1;
+      const nextAssignments = summary.candidates[nextIndex];
+      if (!nextAssignments) {
+        return;
+      }
+
+      applyScenarioAssignmentsChange(scenarioId, () => nextAssignments, {
+        summary: {
+          ...summary,
+          currentIndex: nextIndex
+        }
+      });
+    },
+    [applyScenarioAssignmentsChange]
+  );
 
   const beginScenarioReorder = (
     scenarioId: string,
@@ -2405,9 +3083,7 @@ function TeamsContent() {
       copy="Build independent team scenarios. Players can move only within the scenario they belong to."
     >
       <div className="status-bar">
-        <div className="status-chip">
-          {loading ? "Loading roster seed..." : "Drag chips within a scenario or use each scenario's player pool."}
-        </div>
+        {loading ? <div className="status-chip">Loading roster seed...</div> : null}
         {hasCommittedTeamValidationError ? (
           <div className="status-chip error" role="status">
             Resolve duplicate or blank team names before syncing teams.
@@ -2518,6 +3194,7 @@ function TeamsContent() {
             ) : null}
           </div>
         </section>
+        <div className="scenario-section-divider" aria-hidden="true" />
         {orderedScenarios.map((scenario) => {
           const displayedAssignments =
             displayedAssignmentsByScenario.get(scenario.id) ?? scenario.assignments;
@@ -2531,7 +3208,14 @@ function TeamsContent() {
             selectedAvailablePlayer?.scenarioId === scenario.id
               ? selectedAvailablePlayer.playerId
               : null;
-          const isRandomizingScenario = randomizingScenarioId === scenario.id;
+          const currentScenarioAction =
+            scenarioActionState?.scenarioId === scenario.id ? scenarioActionState.mode : null;
+          const currentScenarioSummary = scenarioActionSummaries[scenario.id] ?? null;
+          const currentScenarioUndoDepth = scenarioUndoStacks[scenario.id]?.length ?? 0;
+          const canViewNextGeneratedScenario = Boolean(
+            currentScenarioSummary &&
+              currentScenarioSummary.currentIndex < currentScenarioSummary.candidates.length - 1
+          );
           const hasOpenSlots = teams.some((team) =>
             POSITIONS.some((position) => (scenario.assignments[team.id]?.[position] ?? null) === null)
           );
@@ -2681,32 +3365,96 @@ function TeamsContent() {
                     }}
                     className={`available-shell${poolDropScenarioId === scenario.id ? " pool-drop-active" : ""}`}
                   >
-                    <div className="available-header">
-                      <h2 className="available-title">Player Pool</h2>
+                    <div className="available-toolbar">
                       <div className="available-actions">
                         <button
                           type="button"
                           className="available-reset-button"
                           onClick={() => resetScenarioAssignments(scenario.id)}
-                          disabled={isRandomizingScenario || !hasAssignedPlayers}
+                          disabled={Boolean(scenarioActionState) || !hasAssignedPlayers}
                         >
-                          Reset
+                          <span className="available-action-button-label">Reset</span>
                         </button>
                         <button
                           type="button"
-                          className="available-randomize-button"
+                          className="available-undo-button"
+                          onClick={() => undoScenarioAssignments(scenario.id)}
+                          disabled={Boolean(scenarioActionState) || currentScenarioUndoDepth === 0}
+                          aria-label="Undo last scenario change"
+                        >
+                          <span className="available-action-button-label">Undo</span>
+                        </button>
+                        <button
+                          type="button"
+                          className={`available-randomize-button${currentScenarioAction === "randomize" ? " loading" : ""}`}
+                          aria-busy={currentScenarioAction === "randomize"}
                           onClick={() => randomizeScenarioRemainingPlayers(scenario.id)}
                           disabled={
-                            isRandomizingScenario ||
+                            Boolean(scenarioActionState) ||
                             !hasAssignablePoolPlayers ||
                             !hasOpenSlots
                           }
                         >
-                          {isRandomizingScenario ? "Thinking..." : "Randomize Remaining"}
+                          <span className="available-action-button-label">Random</span>
+                        </button>
+                        <button
+                          type="button"
+                          className={`available-randomize-button${currentScenarioAction === "balanceOverall" ? " loading" : ""}`}
+                          aria-busy={currentScenarioAction === "balanceOverall"}
+                          onClick={() => runBalancedScenarioRemainingPlayers(scenario.id, "overall")}
+                          disabled={
+                            Boolean(scenarioActionState) ||
+                            !hasAssignablePoolPlayers ||
+                            !hasOpenSlots
+                          }
+                        >
+                          <span className="available-action-button-label">Balance Overall</span>
+                        </button>
+                        <button
+                          type="button"
+                          className={`available-randomize-button${currentScenarioAction === "balanceCategories" ? " loading" : ""}`}
+                          aria-busy={currentScenarioAction === "balanceCategories"}
+                          onClick={() => runBalancedScenarioRemainingPlayers(scenario.id, "categories")}
+                          disabled={
+                            Boolean(scenarioActionState) ||
+                            !hasAssignablePoolPlayers ||
+                            !hasOpenSlots
+                          }
+                        >
+                          <span className="available-action-button-label">Balance Categories</span>
                         </button>
                       </div>
                     </div>
-                      <div className="available-players">
+                    {currentScenarioSummary ? (
+                      <div className="available-feedback" role="status" aria-live="polite">
+                        <span>
+                          {currentScenarioSummary.mode === "randomize"
+                            ? `Generated ${currentScenarioSummary.generatedCount} teams and selected one at random.`
+                            : `Generated ${currentScenarioSummary.generatedCount} random teams, selected the scenario with the most balanced scores ${
+                                currentScenarioSummary.mode === "balanceOverall"
+                                  ? "overall"
+                                  : "across each category"
+                              }.`}
+                        </span>
+                        {canViewNextGeneratedScenario ? (
+                          <button
+                            type="button"
+                            className="available-feedback-link"
+                            onClick={() => showNextGeneratedScenario(scenario.id)}
+                            disabled={Boolean(scenarioActionState)}
+                            aria-label="View next generated team setup"
+                          >
+                            {currentScenarioSummary.mode === "randomize"
+                              ? "View Next -->"
+                              : "View Next Best -->"}
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    <div className="available-header">
+                      <h2 className="available-title">Player Pool</h2>
+                    </div>
+                    <div className="available-players">
                       {availablePlayers.map((player) => {
                         const isSelected = selectedAvailablePlayerId === player.id;
                         const isAssignable = canPlayerBeAssignedFromPool(player);
