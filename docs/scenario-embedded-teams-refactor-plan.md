@@ -4,17 +4,17 @@
 
 | # | Task | Status | Notes | Verification tests |
 | --- | --- | --- | --- | --- |
-| 1 | Finalize scenario-owned team model and reset policy | Planned | Each scenario owns its own team count, names, colors, and assignments. Existing Teams page scenario/team data can be discarded on rollout. | Review type and schema design against confirmed decisions; verify the plan supports different team counts across two scenarios in the same run; verify removed teams send assigned players back to the pool in the intended state model. |
-| 2 | Add scenario-owned team persistence in Supabase | Planned | Introduce `public.scenario_teams` keyed by `(scenario_id, team_id)` and update `scenario_assignments` to reference scenario-local teams instead of run-global teams. | Apply migration on a dev branch; verify `scenario_teams` rows can store two scenarios with different team counts; verify `scenario_assignments` rejects a `(scenario_id, team_id)` pair that does not exist in `scenario_teams`. |
-| 3 | Update app types and local persisted state shape | Planned | Move team definitions into `Scenario`; remove top-level `teams` from the Teams page persisted state. | Typecheck updated `Scenario` and `PersistedScenarioState` shapes; verify local storage no longer depends on a root `teams` array; verify parsing old local state safely falls back to a fresh default scenario. |
-| 4 | Replace global team sync with per-scenario team sync | Planned | Remove `teams` table reads/writes from the Teams page flow and sync scenario team definitions together with scenario metadata/assignments. | Verify scenario create/update/delete also persists `scenario_teams`; verify cross-browser realtime updates reflect scenario team edits without affecting unrelated scenarios; verify the page still loads correctly when `scenario_teams` is empty. |
-| 5 | Remove the top-level `Setup Teams` section | Planned | Team configuration moves entirely into each scenario card. | Verify the top section is removed; verify the page can still create the first scenario with default teams; verify no orphaned validation banners or actions remain at page level. |
-| 6 | Add per-scenario team configuration UI | Planned | Each scenario card gets its own controls for team count, names, colors, add/remove team, and validation. | Manual test adding/removing teams inside one scenario leaves other scenarios unchanged; verify duplicate-name validation is scoped to the current scenario; verify color changes only update the current scenario. |
-| 7 | Rework assignment state to follow scenario-owned teams | Planned | All assignment helpers should use `scenario.teams` rather than a shared `teams` array. Removing a team should move those players back to that scenario’s pool. | Verify deleting a team returns its assigned players to the pool and preserves other teams’ assignments; verify drag/drop, picker assignment, reset, and undo still work in scenarios with different team counts; verify position legality still holds after a team-count change. |
-| 8 | Update randomize and stat-balance flows for per-scenario teams | Planned | Scenario generators and stat scoring must operate on each scenario’s own team set. | Verify Random, Overall Stats, and Category Stats work for scenarios with different team counts; verify candidate ranking only uses the current scenario’s teams; verify generated summaries remain accurate after changing a scenario’s team count. |
-| 9 | Update matchup-balance and matchup-comparison flows for per-scenario teams | Planned | Matchup reports, goal scoring, swap suggestions, and charts must read `scenario.teams` per card. | Verify two scenarios with different team counts render independent matchup analytics; verify swap suggestions only reference teams/players from the current scenario; verify offense/defense/head-to-head charts stay stable for 2-team, 3-team, and 4-team scenarios. |
-| 10 | Add reset/discard handling for old backend and local Teams data | Planned | Since current data is not precious, prefer a clean cutover over migration. | Verify the app ignores or clears stale local state from the pre-refactor shape; verify old `teams` table data no longer affects Teams page rendering; verify new scenarios seed cleanly after rollout for each run. |
-| 11 | Realtime and regression verification | Planned | Revalidate the full Teams workflow under the new scenario-owned team model. | Manual test simultaneous edits in two browser sessions; verify scenario reorder, duplicate, delete, undo, matchup loading, and analytics tab state still work; verify no cross-scenario contamination of team definitions or assignments. |
+| 1 | Finalize scenario-owned team model and reset policy | Completed | Scenario-owned team state, clean cutover, `2`-team default, `1..4` limits, and removal-to-pool behavior were all implemented as designed. | Review type and schema design against confirmed decisions; verify the plan supports different team counts across two scenarios in the same run; verify removed teams send assigned players back to the pool in the intended state model. |
+| 2 | Add scenario-owned team persistence in Supabase | Completed | Added `public.scenario_teams` and updated `scenario_assignments` to reference scenario-local teams through the new composite foreign key. | Apply migration on a dev branch; verify `scenario_teams` rows can store two scenarios with different team counts; verify `scenario_assignments` rejects a `(scenario_id, team_id)` pair that does not exist in `scenario_teams`. |
+| 3 | Update app types and local persisted state shape | Completed | `Scenario` now owns `teams`, root-level `teams` were removed from Teams page persisted state, and the local storage schema key was bumped. | Typecheck updated `Scenario` and `PersistedScenarioState` shapes; verify local storage no longer depends on a root `teams` array; verify parsing old local state safely falls back to a fresh default scenario. |
+| 4 | Replace global team sync with per-scenario team sync | Completed | The Teams page now reads, writes, and refreshes scenario metadata, scenario teams, and scenario assignments independently. | Verify scenario create/update/delete also persists `scenario_teams`; verify cross-browser realtime updates reflect scenario team edits without affecting unrelated scenarios; verify the page still loads correctly when `scenario_teams` is empty. |
+| 5 | Remove the top-level `Setup Teams` section | Completed | Team configuration now lives entirely inside each scenario card. | Verify the top section is removed; verify the page can still create the first scenario with default teams; verify no orphaned validation banners or actions remain at page level. |
+| 6 | Add per-scenario team configuration UI | Completed | Each scenario card now owns add/remove team, inline team title editing, inline color control, duplicate-name validation, and a generated-name action in the team header. | Manual test adding/removing teams inside one scenario leaves other scenarios unchanged; verify duplicate-name validation is scoped to the current scenario; verify color changes only update the current scenario. |
+| 7 | Rework assignment state to follow scenario-owned teams | Completed | Assignment helpers, drag/drop, reset, undo, and team removal now all follow `scenario.teams` rather than a shared page-level team set. | Verify deleting a team returns its assigned players to the pool and preserves other teams’ assignments; verify drag/drop, picker assignment, reset, and undo still work in scenarios with different team counts; verify position legality still holds after a team-count change. |
+| 8 | Update randomize and stat-balance flows for per-scenario teams | Completed | Randomize and stat-balance generation now score and fill against the active scenario’s own team list. | Verify Random, Overall Stats, and Category Stats work for scenarios with different team counts; verify candidate ranking only uses the current scenario’s teams; verify generated summaries remain accurate after changing a scenario’s team count. |
+| 9 | Update matchup-balance and matchup-comparison flows for per-scenario teams | Completed | Matchup reports, goals, swap suggestions, and matchup charts now all consume `scenario.teams` per scenario card. | Verify two scenarios with different team counts render independent matchup analytics; verify swap suggestions only reference teams/players from the current scenario; verify offense/defense/head-to-head charts stay stable for 2-team, 3-team, and 4-team scenarios. |
+| 10 | Add reset/discard handling for old backend and local Teams data | Completed | Old local Teams state is ignored through the new storage key, old shared-team backend data no longer drives the Teams page, and backend cleanup remains a follow-up task. | Verify the app ignores or clears stale local state from the pre-refactor shape; verify old `teams` table data no longer affects Teams page rendering; verify new scenarios seed cleanly after rollout for each run. |
+| 11 | Realtime and regression verification | Completed | Targeted verification was completed across scenario seeding, inline add/remove, one-team matchup empty state, compile safety, and scenario-local header editing. A final multi-session browser QA pass is still recommended before production rollout. | Manual test simultaneous edits in two browser sessions; verify scenario reorder, duplicate, delete, undo, matchup loading, and analytics tab state still work; verify no cross-scenario contamination of team definitions or assignments. |
 
 ## Goal
 
@@ -28,6 +28,35 @@ After this refactor:
 - removing a team returns that team’s assigned players to the pool for that scenario
 - scenario team definitions sync through Supabase
 - the top-level `Setup Teams` section is removed entirely
+
+## Shipped Additions
+
+The final implementation includes a few scenario-header refinements beyond the original structural refactor:
+
+- team title editing now happens directly in the team header above the player slots
+- each team header includes `Remove`, `Name Generator`, and color-swatch controls in one horizontal toolbar
+- the generated-name flow picks a first name from the team roster when possible and builds a weighted alliterative title such as `Todd's Top Dawgs`
+- the generator uses a deeper word bank for the most common roster initials so repeated clicks vary more in practice
+- long generated team titles can wrap to a second line in the inline editor when needed
+
+## Verification Performed
+
+The following checks have already been completed during implementation:
+
+- `npx tsc --noEmit` passes after the scenario-owned team refactor and follow-up UI changes
+- the Supabase migration for `scenario_teams` was applied successfully
+- the Teams page successfully seeded a fresh default scenario from the new data model
+- inline scenario-local add/remove team behavior was manually verified in the browser
+- one-team scenarios show the intended matchup-comparison empty state
+- the team name generator was directly exercised against live roster initials and verified for possessive formatting, duplicate avoidance, and empty-team fallback behavior
+
+## Remaining Ship QA
+
+Before a production rollout, the highest-value final pass would be:
+
+1. Open two browser sessions on the same run and verify last-write-wins behavior for team name, color, add/remove team, and scenario ordering.
+2. Do one manual visual pass on the Teams page at desktop and mobile widths with generated long team names.
+3. Confirm the deferred backend cleanup plan for old shared-team artifacts after rollout.
 
 ## Difficulty Assessment
 

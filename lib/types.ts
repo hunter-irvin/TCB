@@ -53,6 +53,7 @@ export type SlotDescriptor = {
 export type Scenario = {
   id: string;
   title: string;
+  teams: Team[];
   assignments: Assignments;
   collapsed: boolean;
 };
@@ -60,5 +61,4 @@ export type Scenario = {
 export type PersistedScenarioState = {
   nextScenarioNumber: number;
   scenarios: Scenario[];
-  teams: Team[];
 };

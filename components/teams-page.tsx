@@ -5,7 +5,7 @@ import { createPortal } from "react-dom";
 import { AppShell } from "@/components/app-shell";
 import { useRun } from "@/components/run-provider";
 import { TournamentBuilderProvider, useTournamentBuilder } from "@/components/tournament-builder";
-import { DEFAULT_RUN_SLUG, buildRunApiPath, buildRunScopedStorageKey } from "@/lib/runs";
+import { buildRunApiPath, buildRunScopedStorageKey } from "@/lib/runs";
 import {
   MAX_TEAMS,
   PLAYER_ATTRIBUTE_GROUPS,
@@ -24,16 +24,15 @@ import {
   getNextScenarioNumber,
   normalizeScenarioIds,
   normalizeTeamColor,
-  normalizeTeams,
   parseStoredScenarioState,
   scenarioAssignmentsToRows,
+  scenarioTeamsToRows,
   scenariosToRows,
-  TEAM_SELECT_COLUMNS,
+  SCENARIO_TEAM_SELECT_COLUMNS,
   TEAM_SCENARIO_SELECT_COLUMNS,
-  TEAM_SCENARIOS_STORAGE_KEY,
-  teamsFromRows,
-  teamsToRows
+  TEAM_SCENARIOS_STORAGE_KEY
 } from "@/lib/supabase/tcb";
+import { generateScenarioTeamName } from "@/lib/team-name-generator";
 import {
   buildMatchupScoreLookup,
   buildScenarioMatchupReport,
@@ -139,6 +138,7 @@ type MatchupBundleRequestState =
   | { status: "ready"; error: null; data: MatchupVisualizerBundleResponse };
 
 type ScenarioHistoryEntry = {
+  teams: Team[];
   assignments: Assignments;
   summary: ScenarioActionSummary | null;
 };
@@ -167,6 +167,7 @@ type GeneratedMatchupScenarioCandidate = {
 
 type StartDragFn = (playerId: number, chipNode: HTMLDivElement) => void;
 const SCENARIO_SYNC_DEBOUNCE_MS = 2000;
+const TEAM_NAME_SCENARIO_COMMIT_DELAY_MS = 350;
 const TEAM_COLOR_SCENARIO_COMMIT_DELAY_MS = 120;
 const SCENARIO_ACTION_PROGRESS_MS = 2000;
 const REMAINING_ASSIGNMENT_ATTEMPTS = 25;
@@ -186,6 +187,8 @@ type TeamDraft = {
   name: string;
   color: string;
 };
+
+type ScenarioTeamDrafts = Record<string, Record<string, TeamDraft>>;
 
 type TeamAttributeStack = {
   team: Team;
@@ -223,6 +226,18 @@ function getTeamDisplayName(team: Team, index: number) {
   return name || `Team ${index + 1}`;
 }
 
+function getScenarioTeamCommitKey(
+  scenarioId: string,
+  teamId: string,
+  kind: "name" | "color"
+) {
+  return `${scenarioId}:${teamId}:${kind}`;
+}
+
+function cloneTeams(teams: Team[]) {
+  return teams.map((team) => ({ ...team }));
+}
+
 function buildTeamChemistryBonusTotal(
   assignments: Assignments,
   playersById: ReadonlyMap<number, Player>,
@@ -247,10 +262,21 @@ function buildTeamChemistryBonusTotal(
   }, 0);
 }
 
-function createScenario(index: number, teams: Team[]): Scenario {
+function createDefaultTeams(runSlug: string, count = 2) {
+  const teams: Team[] = [];
+
+  for (let index = 0; index < count; index += 1) {
+    teams.push(createTeam(index, teams, runSlug));
+  }
+
+  return teams;
+}
+
+function createScenario(index: number, runSlug: string, teams: Team[] = createDefaultTeams(runSlug)): Scenario {
   return {
     id: createScenarioId(),
     title: `Team Scenario ${index}`,
+    teams: cloneTeams(teams),
     assignments: createEmptyAssignments(teams),
     collapsed: false
   };
@@ -466,13 +492,6 @@ function reconcileAssignmentsToTeams(assignments: Assignments, teams: Team[]) {
   }
 
   return nextAssignments;
-}
-
-function reconcileScenariosToTeams(scenarios: Scenario[], teams: Team[]) {
-  return scenarios.map((scenario) => ({
-    ...scenario,
-    assignments: reconcileAssignmentsToTeams(scenario.assignments, teams)
-  }));
 }
 
 function shuffleArray<T>(items: T[]) {
@@ -961,14 +980,36 @@ function createTeam(teamIndex: number, currentTeams: Team[], runSlug: string): T
   };
 }
 
-function buildTeamDrafts(teams: Team[]): Record<string, TeamDraft> {
+function buildScenarioTeamDrafts(scenarios: Scenario[]): ScenarioTeamDrafts {
   return Object.fromEntries(
-    teams.map((team, index) => [
-      team.id,
-      {
-        name: team.name,
-        color: normalizeTeamColor(team.color, TEAM_COLOR_PALETTE[index] ?? TEAM_COLOR_PALETTE[0])
-      }
+    scenarios.map((scenario) => [
+      scenario.id,
+      Object.fromEntries(
+        scenario.teams.map((team, index) => [
+          team.id,
+          {
+            name: team.name,
+            color: normalizeTeamColor(team.color, TEAM_COLOR_PALETTE[index] ?? TEAM_COLOR_PALETTE[0])
+          }
+        ])
+      )
+    ])
+  );
+}
+
+function mergeScenarioTeamDrafts(currentDrafts: ScenarioTeamDrafts, scenarios: Scenario[]): ScenarioTeamDrafts {
+  return Object.fromEntries(
+    scenarios.map((scenario) => [
+      scenario.id,
+      Object.fromEntries(
+        scenario.teams.map((team, index) => [
+          team.id,
+          currentDrafts[scenario.id]?.[team.id] ?? {
+            name: team.name,
+            color: normalizeTeamColor(team.color, TEAM_COLOR_PALETTE[index] ?? TEAM_COLOR_PALETTE[0])
+          }
+        ])
+      )
     ])
   );
 }
@@ -1001,6 +1042,10 @@ function getTeamNameErrors(teams: Team[]) {
 
 function getScenarioMetaSignature(scenarios: Scenario[], runId: string) {
   return JSON.stringify(scenariosToRows(scenarios, runId));
+}
+
+function getScenarioTeamSignature(scenario: Scenario) {
+  return JSON.stringify(scenarioTeamsToRows(scenario));
 }
 
 function getScenarioAssignmentSignature(assignments: Assignments) {
@@ -1272,26 +1317,20 @@ function TeamsContent() {
   const scenarioRectsRef = useRef(new Map<string, DOMRect>());
   const previewTargetRef = useRef<ScenarioSlot | null>(null);
   const poolHoverRef = useRef<string | null>(null);
-  const defaultInitialTeam = useMemo(() => createTeam(0, [], run.slug), [run.slug]);
-  const initialTeams = useMemo(() => [defaultInitialTeam], [defaultInitialTeam]);
+  const initialScenarios = useMemo(() => [createScenario(1, run.slug)], [run.slug]);
   const storageKey = useMemo(
     () => buildRunScopedStorageKey(TEAM_SCENARIOS_STORAGE_KEY, run.slug),
     [run.slug]
   );
-  const latestTeamsRef = useRef<Team[]>(initialTeams);
-  const lastSyncedTeamSignatureRef = useRef(JSON.stringify(teamsToRows(latestTeamsRef.current, run.id)));
-  const pendingTeamsRef = useRef<Team[] | null>(null);
-  const teamSyncInFlightRef = useRef(false);
-  const suppressTeamRealtimeRef = useRef(false);
-  const teamRefreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const teamRefreshInFlightRef = useRef(false);
-  const teamRefreshQueuedRef = useRef(false);
-  const teamSyncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const teamColorCommitTimeoutsRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
-  const teamDraftsRef = useRef<Record<string, TeamDraft>>(buildTeamDrafts(latestTeamsRef.current));
-  const latestScenariosRef = useRef<Scenario[]>([createScenario(1, latestTeamsRef.current)]);
+  const scenarioTeamCommitTimeoutsRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  const latestScenariosRef = useRef<Scenario[]>(initialScenarios);
   const lastSyncedScenarioMetaSignatureRef = useRef(
     getScenarioMetaSignature(latestScenariosRef.current, run.id)
+  );
+  const lastSyncedScenarioTeamSignaturesRef = useRef(
+    new Map(
+      latestScenariosRef.current.map((scenario) => [scenario.id, getScenarioTeamSignature(scenario)])
+    )
   );
   const lastSyncedScenarioAssignmentSignaturesRef = useRef(
     new Map(
@@ -1302,26 +1341,30 @@ function TeamsContent() {
     )
   );
   const pendingScenarioMetaRef = useRef<Scenario[] | null>(null);
+  const pendingScenarioTeamsRef = useRef<Scenario[] | null>(null);
+  const dirtyScenarioTeamIdsRef = useRef(new Set<string>());
   const pendingScenarioAssignmentsRef = useRef<Scenario[] | null>(null);
   const dirtyScenarioAssignmentIdsRef = useRef(new Set<string>());
   const scenarioMetaSyncInFlightRef = useRef(false);
+  const scenarioTeamSyncInFlightRef = useRef(false);
   const scenarioAssignmentSyncInFlightRef = useRef(false);
   const suppressScenarioRealtimeRef = useRef(false);
   const scenarioRefreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scenarioRefreshInFlightRef = useRef(false);
   const scenarioRefreshQueuedRef = useRef(false);
   const scenarioMetaSyncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scenarioTeamSyncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scenarioAssignmentSyncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [teams, setTeams] = useState<Team[]>(latestTeamsRef.current);
-  const [teamDrafts, setTeamDrafts] = useState<Record<string, TeamDraft>>(
-    buildTeamDrafts(latestTeamsRef.current)
+  const [scenarios, setScenarios] = useState<Scenario[]>(initialScenarios);
+  const [scenarioTeamDrafts, setScenarioTeamDrafts] = useState<ScenarioTeamDrafts>(
+    buildScenarioTeamDrafts(initialScenarios)
   );
-  const [scenarios, setScenarios] = useState<Scenario[]>([createScenario(1, latestTeamsRef.current)]);
+  const scenarioTeamDraftsRef = useRef<ScenarioTeamDrafts>(buildScenarioTeamDrafts(initialScenarios));
   const [nextScenarioNumber, setNextScenarioNumber] = useState(2);
   const [storageHydrated, setStorageHydrated] = useState(false);
   const [bootstrapSyncRequestVersion, setBootstrapSyncRequestVersion] = useState(0);
-  const [teamSyncError, setTeamSyncError] = useState<string | null>(null);
   const [scenarioSyncError, setScenarioSyncError] = useState<string | null>(null);
+  const [scenarioTeamSyncError, setScenarioTeamSyncError] = useState<string | null>(null);
   const [scenarioActionState, setScenarioActionState] = useState<ScenarioActionState | null>(null);
   const [scenarioActionSummaries, setScenarioActionSummaries] = useState<
     Record<string, ScenarioActionSummary | null>
@@ -1361,22 +1404,31 @@ function TeamsContent() {
     [scenarios]
   );
 
-  const draftTeams = useMemo(
+  const draftTeamsByScenario = useMemo(
     () =>
-      teams.map((team, index) => ({
-        ...team,
-        name: teamDrafts[team.id]?.name ?? team.name,
-        color:
-          teamDrafts[team.id]?.color ??
-          normalizeTeamColor(team.color, TEAM_COLOR_PALETTE[index] ?? TEAM_COLOR_PALETTE[0])
-      })),
-    [teamDrafts, teams]
+      new Map(
+        scenarios.map((scenario) => [
+          scenario.id,
+          scenario.teams.map((team, index) => ({
+            ...team,
+            name: scenarioTeamDrafts[scenario.id]?.[team.id]?.name ?? team.name,
+            color:
+              scenarioTeamDrafts[scenario.id]?.[team.id]?.color ??
+              normalizeTeamColor(team.color, TEAM_COLOR_PALETTE[index] ?? TEAM_COLOR_PALETTE[0])
+          }))
+        ] as const)
+      ),
+    [scenarioTeamDrafts, scenarios]
   );
-
-  const teamNameErrors = useMemo(() => getTeamNameErrors(draftTeams), [draftTeams]);
-  const hasCommittedTeamValidationError = useMemo(
-    () => getTeamNameErrors(teams).some((error) => error !== null),
-    [teams]
+  const teamNameErrorsByScenario = useMemo(
+    () =>
+      Object.fromEntries(
+        scenarios.map((scenario) => [
+          scenario.id,
+          getTeamNameErrors(draftTeamsByScenario.get(scenario.id) ?? scenario.teams)
+        ])
+      ) as Record<string, Array<string | null>>,
+    [draftTeamsByScenario, scenarios]
   );
   const matchupLookup = useMemo(
     () => buildMatchupScoreLookup(matchupBundleState.status === "ready" ? matchupBundleState.data : null),
@@ -1387,24 +1439,24 @@ function TeamsContent() {
       Object.fromEntries(
         scenarios.map((scenario) => [
           scenario.id,
-          buildScenarioMatchupReport(scenario.assignments, teams, matchupLookup)
+          buildScenarioMatchupReport(scenario.assignments, scenario.teams, matchupLookup)
         ])
       ) as Record<string, ScenarioMatchupReport>,
-    [matchupLookup, scenarios, teams]
+    [matchupLookup, scenarios]
   );
   const scenarioMatchupSwapSuggestions = useMemo(
     () =>
       Object.fromEntries(
         scenarios.map((scenario) => {
           const isComplete =
-            countFilledAssignments(scenario.assignments) === teams.length * POSITIONS.length;
+            countFilledAssignments(scenario.assignments) === scenario.teams.length * POSITIONS.length;
 
           return [
             scenario.id,
             isComplete
               ? findBestScenarioMatchupSwapSuggestions(
                   scenario.assignments,
-                  teams,
+                  scenario.teams,
                   playerById,
                   matchupLookup,
                   scenarioMatchupReports[scenario.id]
@@ -1417,20 +1469,16 @@ function TeamsContent() {
           ] as const;
         })
       ) as Record<string, ScenarioMatchupSwapSuggestions>,
-    [matchupLookup, playerById, scenarioMatchupReports, scenarios, teams]
+    [matchupLookup, playerById, scenarioMatchupReports, scenarios]
   );
 
   useEffect(() => {
-    latestTeamsRef.current = teams;
-  }, [teams]);
+    setScenarioTeamDrafts((current) => mergeScenarioTeamDrafts(current, scenarios));
+  }, [scenarios]);
 
   useEffect(() => {
-    setTeamDrafts(buildTeamDrafts(teams));
-  }, [teams]);
-
-  useEffect(() => {
-    teamDraftsRef.current = teamDrafts;
-  }, [teamDrafts]);
+    scenarioTeamDraftsRef.current = scenarioTeamDrafts;
+  }, [scenarioTeamDrafts]);
 
   useEffect(() => {
     latestScenariosRef.current = scenarios;
@@ -1527,12 +1575,11 @@ function TeamsContent() {
     };
   }, [run.slug]);
 
-  const syncTeamRefFromSnapshot = useCallback((snapshot: Team[]) => {
-    lastSyncedTeamSignatureRef.current = JSON.stringify(teamsToRows(snapshot, run.id));
-  }, [run.id]);
-
   const syncScenarioRefsFromSnapshot = useCallback((snapshot: Scenario[]) => {
     lastSyncedScenarioMetaSignatureRef.current = getScenarioMetaSignature(snapshot, run.id);
+    lastSyncedScenarioTeamSignaturesRef.current = new Map(
+      snapshot.map((scenario) => [scenario.id, getScenarioTeamSignature(scenario)])
+    );
     lastSyncedScenarioAssignmentSignaturesRef.current = new Map(
       snapshot.map((scenario) => [
         scenario.id,
@@ -1541,28 +1588,70 @@ function TeamsContent() {
     );
   }, [run.id]);
 
+  const fetchScenariosSnapshot = useCallback(async () => {
+    const supabase = getSupabaseBrowserClient();
+    const { data: scenarioRows, error: scenarioError } = await supabase
+      .from("team_scenarios")
+      .select(TEAM_SCENARIO_SELECT_COLUMNS)
+      .eq("run_id", run.id)
+      .order("sort_order", {
+        ascending: true
+      });
+
+    if (scenarioError) {
+      throw scenarioError;
+    }
+
+    const scenarioIds = (scenarioRows ?? []).map((scenario) => scenario.id);
+    const [scenarioTeamResult, assignmentResult] = await Promise.all([
+      scenarioIds.length > 0
+        ? supabase
+            .from("scenario_teams")
+            .select(SCENARIO_TEAM_SELECT_COLUMNS)
+            .in("scenario_id", scenarioIds)
+            .order("scenario_id", { ascending: true })
+            .order("display_order", { ascending: true })
+        : Promise.resolve({ data: [], error: null }),
+      scenarioIds.length > 0
+        ? supabase
+            .from("scenario_assignments")
+            .select("scenario_id,team_id,position,player_id")
+            .in("scenario_id", scenarioIds)
+            .order("scenario_id", { ascending: true })
+        : Promise.resolve({ data: [], error: null })
+    ]);
+
+    if (scenarioTeamResult.error) {
+      throw scenarioTeamResult.error;
+    }
+
+    if (assignmentResult.error) {
+      throw assignmentResult.error;
+    }
+
+    return {
+      scenarioRows: scenarioRows ?? [],
+      scenarioTeamRows: scenarioTeamResult.data ?? [],
+      assignmentRows: assignmentResult.data ?? []
+    };
+  }, [run.id]);
+
   useEffect(() => {
     let cancelled = false;
-    const storedState = parseStoredScenarioState(
-      window.localStorage.getItem(storageKey) ??
-        (run.slug === DEFAULT_RUN_SLUG ? window.localStorage.getItem(TEAM_SCENARIOS_STORAGE_KEY) : null)
-    );
-    const storedTeams = storedState?.teams?.length ? normalizeTeams(storedState.teams) : [];
+    const storedState = parseStoredScenarioState(window.localStorage.getItem(storageKey));
+    const normalizedScenarios =
+      storedState?.scenarios.length
+        ? normalizeScenarioIds(storedState.scenarios).map((scenario) => ({
+            ...scenario,
+            collapsed: scenario.collapsed ?? false
+          }))
+        : [];
 
-    if (storedState && storedState.scenarios.length > 0) {
-      const initialStoredTeams = storedTeams.length > 0 ? storedTeams : [createTeam(0, [], run.slug)];
-      const normalizedScenarios = reconcileScenariosToTeams(
-        normalizeScenarioIds(storedState.scenarios).map((scenario) => ({
-          ...scenario,
-          collapsed: scenario.collapsed ?? false
-        })),
-        initialStoredTeams
-      );
-      setTeams(initialStoredTeams);
+    if (normalizedScenarios.length > 0) {
       setScenarios(normalizedScenarios);
       setNextScenarioNumber(
         Math.max(
-          storedState.nextScenarioNumber ?? normalizedScenarios.length + 1,
+          storedState?.nextScenarioNumber ?? normalizedScenarios.length + 1,
           getNextScenarioNumber(normalizedScenarios)
         )
       );
@@ -1576,129 +1665,74 @@ function TeamsContent() {
       }
 
       try {
-        const supabase = getSupabaseBrowserClient();
-        const [{ data: teamRows, error: teamError }, { data: scenarioRows, error: scenarioError }] =
-          await Promise.all([
-            supabase
-              .from("teams")
-              .select(TEAM_SELECT_COLUMNS)
-              .eq("run_id", run.id)
-              .order("display_order", {
-                ascending: true
-              }),
-            supabase
-              .from("team_scenarios")
-              .select(TEAM_SCENARIO_SELECT_COLUMNS)
-              .eq("run_id", run.id)
-              .order("sort_order", {
-                ascending: true
-              })
-          ]);
-
-        if (teamError) {
-          throw teamError;
-        }
-
-        if (scenarioError) {
-          throw scenarioError;
-        }
-
-        const scenarioIds = (scenarioRows ?? []).map((scenario) => scenario.id);
-        const assignmentResult =
-          scenarioIds.length > 0
-            ? await supabase
-                .from("scenario_assignments")
-                .select("scenario_id,team_id,position,player_id")
-                .in("scenario_id", scenarioIds)
-                .order("scenario_id", { ascending: true })
-            : { data: [], error: null };
-
-        if (assignmentResult.error) {
-          throw assignmentResult.error;
-        }
-
-        const backendTeams = teamsFromRows(teamRows ?? [], storedTeams);
+        const { scenarioRows, scenarioTeamRows, assignmentRows } = await fetchScenariosSnapshot();
         const backendScenarios = buildScenarioState(
-          scenarioRows ?? [],
-          assignmentResult.data ?? [],
-          storedState?.scenarios ?? [],
-          backendTeams
-        );
+          scenarioRows,
+          scenarioTeamRows,
+          assignmentRows,
+          normalizedScenarios
+        ).filter((scenario) => scenario.teams.length > 0);
 
         if (cancelled) {
           return;
         }
 
         if (
-          storedState &&
-          storedState.scenarios.length > 0 &&
-          (scenarioRows?.length ?? 0) === 0 &&
-          (teamRows?.length ?? 0) === 0
+          normalizedScenarios.length > 0 &&
+          scenarioRows.length === 0 &&
+          scenarioTeamRows.length === 0
         ) {
-          const migratedTeams = storedTeams.length > 0 ? storedTeams : [createTeam(0, [], run.slug)];
-          const migratedScenarios = reconcileScenariosToTeams(
-            normalizeScenarioIds(storedState.scenarios),
-            migratedTeams
-          );
-          setTeams(migratedTeams);
-          setScenarios(migratedScenarios);
+          setScenarios(normalizedScenarios);
           setNextScenarioNumber(
             Math.max(
-              storedState.nextScenarioNumber ?? migratedScenarios.length + 1,
-              getNextScenarioNumber(migratedScenarios)
+              storedState?.nextScenarioNumber ?? normalizedScenarios.length + 1,
+              getNextScenarioNumber(normalizedScenarios)
             )
           );
-          pendingTeamsRef.current = migratedTeams;
-          pendingScenarioMetaRef.current = migratedScenarios;
-          pendingScenarioAssignmentsRef.current = migratedScenarios;
-          dirtyScenarioAssignmentIdsRef.current = new Set(
-            migratedScenarios.map((scenario) => scenario.id)
+          pendingScenarioMetaRef.current = normalizedScenarios;
+          pendingScenarioTeamsRef.current = normalizedScenarios;
+          pendingScenarioAssignmentsRef.current = normalizedScenarios;
+          dirtyScenarioTeamIdsRef.current = new Set(
+            normalizedScenarios.map((scenario) => scenario.id)
           );
-          suppressTeamRealtimeRef.current = true;
+          dirtyScenarioAssignmentIdsRef.current = new Set(
+            normalizedScenarios.map((scenario) => scenario.id)
+          );
           suppressScenarioRealtimeRef.current = true;
-          setTeamSyncError("Migrating local team setup to Supabase.");
-          setScenarioSyncError("Migrating local scenarios to Supabase.");
+          setScenarioSyncError("Syncing local scenarios to Supabase.");
+          setScenarioTeamSyncError("Syncing local scenario teams to Supabase.");
           setBootstrapSyncRequestVersion((current) => current + 1);
           return;
         }
 
-        if (backendTeams.length === 0 && (scenarioRows?.length ?? 0) === 0) {
-          const seededTeams = [createTeam(0, [], run.slug)];
-          const seededScenarios = [createScenario(1, seededTeams)];
-          setTeams(seededTeams);
+        if (backendScenarios.length === 0 && scenarioTeamRows.length === 0) {
+          const seededScenarios = [createScenario(1, run.slug)];
           setScenarios(seededScenarios);
           setNextScenarioNumber(getNextScenarioNumber(seededScenarios));
-          pendingTeamsRef.current = seededTeams;
           pendingScenarioMetaRef.current = seededScenarios;
+          pendingScenarioTeamsRef.current = seededScenarios;
           pendingScenarioAssignmentsRef.current = seededScenarios;
+          dirtyScenarioTeamIdsRef.current = new Set(seededScenarios.map((scenario) => scenario.id));
           dirtyScenarioAssignmentIdsRef.current = new Set(
             seededScenarios.map((scenario) => scenario.id)
           );
-          setTeamSyncError("Creating default team setup for this run.");
-          setScenarioSyncError("Creating default scenario setup for this run.");
-          suppressTeamRealtimeRef.current = true;
+          setScenarioSyncError("Creating default scenarios for this run.");
+          setScenarioTeamSyncError("Creating default scenario teams for this run.");
           suppressScenarioRealtimeRef.current = true;
           setBootstrapSyncRequestVersion((current) => current + 1);
           return;
         }
 
-        const nextTeams = backendTeams.length > 0 ? backendTeams : [createTeam(0, [], run.slug)];
-        const nextScenarios =
-          backendScenarios.length > 0 ? backendScenarios : [createScenario(1, nextTeams)];
-        setTeams(nextTeams);
-        setScenarios(nextScenarios);
-        setNextScenarioNumber(getNextScenarioNumber(nextScenarios));
-        syncTeamRefFromSnapshot(nextTeams);
-        syncScenarioRefsFromSnapshot(nextScenarios);
-
-        setTeamSyncError(null);
+        setScenarios(backendScenarios);
+        setNextScenarioNumber(backendScenarios.length > 0 ? getNextScenarioNumber(backendScenarios) : 1);
+        syncScenarioRefsFromSnapshot(backendScenarios);
         setScenarioSyncError(null);
-        suppressTeamRealtimeRef.current = false;
+        setScenarioTeamSyncError(null);
         suppressScenarioRealtimeRef.current = false;
       } catch {
         if (!cancelled) {
-          setTeamSyncError("Unable to load teams from Supabase. Using local data.");
           setScenarioSyncError("Unable to load scenarios from Supabase. Using local data.");
+          setScenarioTeamSyncError("Unable to load scenario teams from Supabase. Using local data.");
         }
       }
     }
@@ -1708,7 +1742,7 @@ function TeamsContent() {
     return () => {
       cancelled = true;
     };
-  }, [run.id, run.slug, storageKey, syncScenarioRefsFromSnapshot, syncTeamRefFromSnapshot]);
+  }, [fetchScenariosSnapshot, run.slug, storageKey, syncScenarioRefsFromSnapshot]);
 
   useEffect(() => {
     if (!storageHydrated) {
@@ -1719,84 +1753,10 @@ function TeamsContent() {
       storageKey,
       JSON.stringify({
         nextScenarioNumber,
-        scenarios,
-        teams
+        scenarios
       } satisfies PersistedScenarioState)
     );
-  }, [nextScenarioNumber, scenarios, storageHydrated, storageKey, teams]);
-
-  const flushTeamSync = useCallback(async () => {
-    if (!hasSupabaseBrowserConfig() || teamSyncInFlightRef.current) {
-      return;
-    }
-
-    const snapshot = pendingTeamsRef.current;
-    if (!snapshot) {
-      return;
-    }
-
-    teamSyncInFlightRef.current = true;
-
-    while (pendingTeamsRef.current) {
-      const nextSnapshot = pendingTeamsRef.current;
-      pendingTeamsRef.current = null;
-
-      try {
-        const supabase = getSupabaseBrowserClient();
-        const teamRows = teamsToRows(nextSnapshot, run.id);
-        const teamIds = nextSnapshot.map((team) => team.id);
-
-        const { data: existingTeamRows, error: existingTeamsError } = await supabase
-          .from("teams")
-          .select("id")
-          .eq("run_id", run.id);
-        if (existingTeamsError) {
-          throw existingTeamsError;
-        }
-
-        const staleTeamIds = (existingTeamRows ?? [])
-          .map((row) => row.id)
-          .filter((id) => !teamIds.includes(id));
-
-        if (staleTeamIds.length > 0) {
-          const { error: deleteStaleAssignmentsError } = await supabase
-            .from("scenario_assignments")
-            .delete()
-            .in("team_id", staleTeamIds);
-          if (deleteStaleAssignmentsError) {
-            throw deleteStaleAssignmentsError;
-          }
-
-          const { error: deleteStaleTeamsError } = await supabase
-            .from("teams")
-            .delete()
-            .eq("run_id", run.id)
-            .in("id", staleTeamIds);
-          if (deleteStaleTeamsError) {
-            throw deleteStaleTeamsError;
-          }
-        }
-
-        const { error: upsertTeamsError } = await supabase
-          .from("teams")
-          .upsert(teamRows, { onConflict: "id" });
-        if (upsertTeamsError) {
-          throw upsertTeamsError;
-        }
-
-        syncTeamRefFromSnapshot(nextSnapshot);
-        setTeamSyncError(null);
-        suppressTeamRealtimeRef.current = false;
-      } catch {
-        pendingTeamsRef.current = latestTeamsRef.current;
-        setTeamSyncError("Changes saved locally. Team backend sync failed.");
-        suppressTeamRealtimeRef.current = true;
-        break;
-      }
-    }
-
-    teamSyncInFlightRef.current = false;
-  }, [run.id, syncTeamRefFromSnapshot]);
+  }, [nextScenarioNumber, scenarios, storageHydrated, storageKey]);
 
   const flushScenarioMetaSync = useCallback(async () => {
     if (!hasSupabaseBrowserConfig() || scenarioMetaSyncInFlightRef.current) {
@@ -1818,13 +1778,6 @@ function TeamsContent() {
         const supabase = getSupabaseBrowserClient();
         const scenarioRows = scenariosToRows(nextSnapshot, run.id);
         const scenarioIds = nextSnapshot.map((scenario) => scenario.id);
-
-        const { error: upsertScenariosError } = await supabase
-          .from("team_scenarios")
-          .upsert(scenarioRows, { onConflict: "id" });
-        if (upsertScenariosError) {
-          throw upsertScenariosError;
-        }
 
         const { data: existingScenarioRows, error: existingScenariosError } = await supabase
           .from("team_scenarios")
@@ -1849,6 +1802,13 @@ function TeamsContent() {
           }
         }
 
+        const { error: upsertScenariosError } = await supabase
+          .from("team_scenarios")
+          .upsert(scenarioRows, { onConflict: "id" });
+        if (upsertScenariosError) {
+          throw upsertScenariosError;
+        }
+
         lastSyncedScenarioMetaSignatureRef.current = getScenarioMetaSignature(nextSnapshot, run.id);
         setScenarioSyncError(null);
         suppressScenarioRealtimeRef.current = false;
@@ -1863,14 +1823,93 @@ function TeamsContent() {
     scenarioMetaSyncInFlightRef.current = false;
   }, [run.id, syncScenarioRefsFromSnapshot]);
 
+  const flushScenarioTeamsSync = useCallback(async () => {
+    if (!hasSupabaseBrowserConfig() || scenarioTeamSyncInFlightRef.current) {
+      return;
+    }
+
+    if (pendingScenarioMetaRef.current || scenarioMetaSyncInFlightRef.current) {
+      await flushScenarioMetaSync();
+      if (pendingScenarioMetaRef.current || scenarioMetaSyncInFlightRef.current) {
+        return;
+      }
+    }
+
+    const snapshot = pendingScenarioTeamsRef.current;
+    if (!snapshot || dirtyScenarioTeamIdsRef.current.size === 0) {
+      return;
+    }
+
+    scenarioTeamSyncInFlightRef.current = true;
+
+    while (pendingScenarioTeamsRef.current && dirtyScenarioTeamIdsRef.current.size > 0) {
+      const nextSnapshot = pendingScenarioTeamsRef.current;
+      const dirtyScenarioIds = Array.from(dirtyScenarioTeamIdsRef.current);
+      pendingScenarioTeamsRef.current = null;
+      dirtyScenarioTeamIdsRef.current = new Set();
+
+      try {
+        const supabase = getSupabaseBrowserClient();
+        const snapshotByScenarioId = new Map(
+          nextSnapshot.map((scenario) => [scenario.id, scenario] as const)
+        );
+        const scenarioTeamRows = dirtyScenarioIds.flatMap((scenarioId) => {
+          const scenario = snapshotByScenarioId.get(scenarioId);
+          return scenario ? scenarioTeamsToRows(scenario) : [];
+        });
+
+        const { error: deleteScenarioTeamsError } = await supabase
+          .from("scenario_teams")
+          .delete()
+          .in("scenario_id", dirtyScenarioIds);
+        if (deleteScenarioTeamsError) {
+          throw deleteScenarioTeamsError;
+        }
+
+        if (scenarioTeamRows.length > 0) {
+          const { error: insertScenarioTeamsError } = await supabase
+            .from("scenario_teams")
+            .insert(scenarioTeamRows);
+          if (insertScenarioTeamsError) {
+            throw insertScenarioTeamsError;
+          }
+        }
+
+        const nextTeamSignatures = new Map(lastSyncedScenarioTeamSignaturesRef.current);
+        for (const scenarioId of dirtyScenarioIds) {
+          const scenario = snapshotByScenarioId.get(scenarioId);
+          if (scenario) {
+            nextTeamSignatures.set(scenarioId, getScenarioTeamSignature(scenario));
+          } else {
+            nextTeamSignatures.delete(scenarioId);
+          }
+        }
+        lastSyncedScenarioTeamSignaturesRef.current = nextTeamSignatures;
+        setScenarioTeamSyncError(null);
+        suppressScenarioRealtimeRef.current = false;
+      } catch {
+        pendingScenarioTeamsRef.current = latestScenariosRef.current;
+        dirtyScenarioTeamIdsRef.current = new Set([
+          ...dirtyScenarioIds,
+          ...dirtyScenarioTeamIdsRef.current
+        ]);
+        setScenarioTeamSyncError("Changes saved locally. Scenario team sync failed.");
+        suppressScenarioRealtimeRef.current = true;
+        break;
+      }
+    }
+
+    scenarioTeamSyncInFlightRef.current = false;
+  }, [flushScenarioMetaSync]);
+
   const flushScenarioAssignmentsSync = useCallback(async () => {
     if (!hasSupabaseBrowserConfig() || scenarioAssignmentSyncInFlightRef.current) {
       return;
     }
 
-    if (pendingTeamsRef.current || teamSyncInFlightRef.current) {
-      await flushTeamSync();
-      if (pendingTeamsRef.current || teamSyncInFlightRef.current) {
+    if (pendingScenarioTeamsRef.current || scenarioTeamSyncInFlightRef.current) {
+      await flushScenarioTeamsSync();
+      if (pendingScenarioTeamsRef.current || scenarioTeamSyncInFlightRef.current) {
         return;
       }
     }
@@ -1950,36 +1989,36 @@ function TeamsContent() {
     }
 
     scenarioAssignmentSyncInFlightRef.current = false;
-  }, [flushScenarioMetaSync, flushTeamSync]);
+  }, [flushScenarioMetaSync, flushScenarioTeamsSync]);
 
-  const flushPendingTeamScenarioSync = useCallback(async () => {
-    await flushTeamSync();
+  const flushPendingScenarioSync = useCallback(async () => {
     await flushScenarioMetaSync();
+    await flushScenarioTeamsSync();
     await flushScenarioAssignmentsSync();
-  }, [flushScenarioAssignmentsSync, flushScenarioMetaSync, flushTeamSync]);
+  }, [flushScenarioAssignmentsSync, flushScenarioMetaSync, flushScenarioTeamsSync]);
 
-  const scheduleTeamSync = useCallback(
+  const scheduleScenarioTeamsSync = useCallback(
     (immediate = false) => {
       if (!hasSupabaseBrowserConfig()) {
         return;
       }
 
-      if (teamSyncTimeoutRef.current) {
-        clearTimeout(teamSyncTimeoutRef.current);
-        teamSyncTimeoutRef.current = null;
+      if (scenarioTeamSyncTimeoutRef.current) {
+        clearTimeout(scenarioTeamSyncTimeoutRef.current);
+        scenarioTeamSyncTimeoutRef.current = null;
       }
 
       if (immediate) {
-        void flushTeamSync();
+        void flushScenarioTeamsSync();
         return;
       }
 
-      teamSyncTimeoutRef.current = setTimeout(() => {
-        teamSyncTimeoutRef.current = null;
-        void flushTeamSync();
-      }, TEAM_SYNC_DEBOUNCE_MS);
+      scenarioTeamSyncTimeoutRef.current = setTimeout(() => {
+        scenarioTeamSyncTimeoutRef.current = null;
+        void flushScenarioTeamsSync();
+      }, SCENARIO_SYNC_DEBOUNCE_MS);
     },
-    [flushTeamSync]
+    [flushScenarioTeamsSync]
   );
 
   const scheduleScenarioMetaSync = useCallback(
@@ -2030,22 +2069,31 @@ function TeamsContent() {
     [flushScenarioAssignmentsSync]
   );
 
-  const queueTeamSync = useCallback(
-    (snapshot: Team[], options?: { immediate?: boolean }) => {
+  const queueScenarioTeamsSync = useCallback(
+    (snapshot: Scenario[], dirtyScenarioIds: string[], options?: { immediate?: boolean }) => {
       if (!hasSupabaseBrowserConfig()) {
         return;
       }
 
-      const nextSignature = JSON.stringify(teamsToRows(snapshot, run.id));
-      if (nextSignature === lastSyncedTeamSignatureRef.current) {
-        pendingTeamsRef.current = null;
+      const nextDirtyScenarioIds = dirtyScenarioIds.filter((scenarioId) => {
+        const scenario = snapshot.find((candidate) => candidate.id === scenarioId);
+        const nextSignature = scenario ? getScenarioTeamSignature(scenario) : null;
+        const previousSignature =
+          lastSyncedScenarioTeamSignaturesRef.current.get(scenarioId) ?? null;
+        return nextSignature !== previousSignature;
+      });
+
+      if (nextDirtyScenarioIds.length === 0) {
         return;
       }
 
-      pendingTeamsRef.current = snapshot;
-      scheduleTeamSync(options?.immediate ?? false);
+      pendingScenarioTeamsRef.current = snapshot;
+      for (const scenarioId of nextDirtyScenarioIds) {
+        dirtyScenarioTeamIdsRef.current.add(scenarioId);
+      }
+      scheduleScenarioTeamsSync(options?.immediate ?? false);
     },
-    [run.id, scheduleTeamSync]
+    [scheduleScenarioTeamsSync]
   );
 
   const queueScenarioMetaSync = useCallback(
@@ -2100,14 +2148,18 @@ function TeamsContent() {
     }
 
     const handleRetry = () => {
-      if (pendingTeamsRef.current || pendingScenarioMetaRef.current || pendingScenarioAssignmentsRef.current) {
-        void flushPendingTeamScenarioSync();
+      if (
+        pendingScenarioMetaRef.current ||
+        pendingScenarioTeamsRef.current ||
+        pendingScenarioAssignmentsRef.current
+      ) {
+        void flushPendingScenarioSync();
       }
     };
 
     const handleVisibilityChange = () => {
       if (document.visibilityState === "hidden") {
-        void flushPendingTeamScenarioSync();
+        void flushPendingScenarioSync();
       }
     };
 
@@ -2122,28 +2174,32 @@ function TeamsContent() {
       window.removeEventListener("pagehide", handleRetry);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, [flushPendingTeamScenarioSync]);
+  }, [flushPendingScenarioSync]);
 
   useEffect(() => {
     if (
       storageHydrated &&
-      (pendingTeamsRef.current || pendingScenarioMetaRef.current || pendingScenarioAssignmentsRef.current)
+      (
+        pendingScenarioMetaRef.current ||
+        pendingScenarioTeamsRef.current ||
+        pendingScenarioAssignmentsRef.current
+      )
     ) {
-      void flushPendingTeamScenarioSync();
+      void flushPendingScenarioSync();
     }
-  }, [bootstrapSyncRequestVersion, flushPendingTeamScenarioSync, storageHydrated]);
+  }, [bootstrapSyncRequestVersion, flushPendingScenarioSync, storageHydrated]);
 
   useEffect(
     () => () => {
-      for (const timeout of teamColorCommitTimeoutsRef.current.values()) {
+      for (const timeout of scenarioTeamCommitTimeoutsRef.current.values()) {
         clearTimeout(timeout);
       }
-      teamColorCommitTimeoutsRef.current.clear();
-      if (teamSyncTimeoutRef.current) {
-        clearTimeout(teamSyncTimeoutRef.current);
-      }
+      scenarioTeamCommitTimeoutsRef.current.clear();
       if (scenarioMetaSyncTimeoutRef.current) {
         clearTimeout(scenarioMetaSyncTimeoutRef.current);
+      }
+      if (scenarioTeamSyncTimeoutRef.current) {
+        clearTimeout(scenarioTeamSyncTimeoutRef.current);
       }
       if (scenarioAssignmentSyncTimeoutRef.current) {
         clearTimeout(scenarioAssignmentSyncTimeoutRef.current);
@@ -2176,13 +2232,10 @@ function TeamsContent() {
         return current;
       }
 
-      if (dirtyScenarioIds.length > 0) {
-        queueScenarioAssignmentsSync(nextScenarios, dirtyScenarioIds);
-      }
-
+      queueScenarioAssignmentsSync(nextScenarios, dirtyScenarioIds);
       return nextScenarios;
     });
-  }, [loading, players, queueScenarioAssignmentsSync, scenarios]);
+  }, [loading, players, queueScenarioAssignmentsSync]);
 
   useEffect(() => {
     if (!hasSupabaseBrowserConfig()) {
@@ -2205,56 +2258,33 @@ function TeamsContent() {
       scenarioRefreshInFlightRef.current = true;
 
       try {
-        const { data: scenarioRows, error: scenarioError } = await supabase
-          .from("team_scenarios")
-          .select(TEAM_SCENARIO_SELECT_COLUMNS)
-          .eq("run_id", run.id)
-          .order("sort_order", {
-            ascending: true
-          });
-
-        if (scenarioError) {
-          throw scenarioError;
-        }
-
-        const scenarioIds = (scenarioRows ?? []).map((scenario) => scenario.id);
-        const assignmentResult =
-          scenarioIds.length > 0
-            ? await supabase
-                .from("scenario_assignments")
-                .select("scenario_id,team_id,position,player_id")
-                .in("scenario_id", scenarioIds)
-                .order("scenario_id", { ascending: true })
-            : { data: [], error: null };
-
-        if (assignmentResult.error) {
-          throw assignmentResult.error;
-        }
-
+        const { scenarioRows, scenarioTeamRows, assignmentRows } = await fetchScenariosSnapshot();
         const backendScenarios = buildScenarioState(
-          scenarioRows ?? [],
-          assignmentResult.data ?? [],
-          latestScenariosRef.current,
-          latestTeamsRef.current
-        );
+          scenarioRows,
+          scenarioTeamRows,
+          assignmentRows,
+          latestScenariosRef.current
+        ).filter((scenario) => scenario.teams.length > 0);
 
         if (!active) {
           return;
         }
 
-        const nextScenarios =
-          backendScenarios.length > 0
-            ? backendScenarios
-            : [createScenario(1, latestTeamsRef.current)];
-        setScenarios((current) => (areScenariosEquivalent(current, nextScenarios) ? current : nextScenarios));
-        setNextScenarioNumber(getNextScenarioNumber(nextScenarios));
-        syncScenarioRefsFromSnapshot(nextScenarios);
+        setScenarios((current) =>
+          areScenariosEquivalent(current, backendScenarios) ? current : backendScenarios
+        );
+        setNextScenarioNumber(backendScenarios.length > 0 ? getNextScenarioNumber(backendScenarios) : 1);
+        syncScenarioRefsFromSnapshot(backendScenarios);
         setScenarioSyncError((current) =>
           current === "Unable to load scenarios from Supabase. Using local data." ? null : current
+        );
+        setScenarioTeamSyncError((current) =>
+          current === "Unable to load scenario teams from Supabase. Using local data." ? null : current
         );
       } catch {
         if (active) {
           setScenarioSyncError("Unable to refresh scenarios from Supabase. Using local data.");
+          setScenarioTeamSyncError("Unable to refresh scenario teams from Supabase. Using local data.");
         }
       } finally {
         scenarioRefreshInFlightRef.current = false;
@@ -2283,16 +2313,9 @@ function TeamsContent() {
 
     channel = supabase
       .channel(`tcb-scenarios-${run.slug}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "team_scenarios" }, () => {
-        scheduleRefresh();
-      })
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "scenario_assignments" },
-        () => {
-          scheduleRefresh();
-        }
-      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "team_scenarios" }, scheduleRefresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "scenario_teams" }, scheduleRefresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "scenario_assignments" }, scheduleRefresh)
       .subscribe();
 
     return () => {
@@ -2305,98 +2328,7 @@ function TeamsContent() {
         void supabase.removeChannel(channel);
       }
     };
-  }, [run.id, run.slug, syncScenarioRefsFromSnapshot]);
-
-  useEffect(() => {
-    if (!hasSupabaseBrowserConfig()) {
-      return undefined;
-    }
-
-    const supabase = getSupabaseBrowserClient();
-    let active = true;
-    let channel: RealtimeChannel | null = null;
-    const runRefresh = async () => {
-      if (suppressTeamRealtimeRef.current) {
-        return;
-      }
-
-      if (teamRefreshInFlightRef.current) {
-        teamRefreshQueuedRef.current = true;
-        return;
-      }
-
-      teamRefreshInFlightRef.current = true;
-
-      try {
-        const { data: teamRows, error: teamError } = await supabase
-          .from("teams")
-          .select(TEAM_SELECT_COLUMNS)
-          .eq("run_id", run.id)
-          .order("display_order", { ascending: true });
-
-        if (teamError) {
-          throw teamError;
-        }
-
-        const backendTeams = teamsFromRows(teamRows ?? [], latestTeamsRef.current);
-
-        if (!active) {
-          return;
-        }
-
-        setTeams((current) => (areTeamsEqual(current, backendTeams) ? current : backendTeams));
-        setScenarios((current) => reconcileScenariosToTeams(current, backendTeams));
-        syncTeamRefFromSnapshot(backendTeams);
-        setTeamSyncError((current) =>
-          current === "Unable to load teams from Supabase. Using local data." ? null : current
-        );
-      } catch {
-        if (active) {
-          setTeamSyncError("Unable to refresh teams from Supabase. Using local data.");
-        }
-      } finally {
-        teamRefreshInFlightRef.current = false;
-
-        if (teamRefreshQueuedRef.current && active) {
-          teamRefreshQueuedRef.current = false;
-          void runRefresh();
-        }
-      }
-    };
-
-    const scheduleRefresh = () => {
-      if (suppressTeamRealtimeRef.current) {
-        return;
-      }
-
-      if (teamRefreshTimeoutRef.current) {
-        clearTimeout(teamRefreshTimeoutRef.current);
-      }
-
-      teamRefreshTimeoutRef.current = setTimeout(() => {
-        teamRefreshTimeoutRef.current = null;
-        void runRefresh();
-      }, 150);
-    };
-
-    channel = supabase
-      .channel(`tcb-teams-${run.slug}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "teams" }, () => {
-        scheduleRefresh();
-      })
-      .subscribe();
-
-    return () => {
-      active = false;
-      if (teamRefreshTimeoutRef.current) {
-        clearTimeout(teamRefreshTimeoutRef.current);
-        teamRefreshTimeoutRef.current = null;
-      }
-      if (channel) {
-        void supabase.removeChannel(channel);
-      }
-    };
-  }, [run.id, run.slug, syncTeamRefFromSnapshot]);
+  }, [fetchScenariosSnapshot, run.slug, syncScenarioRefsFromSnapshot]);
 
   const displayedAssignmentsByScenario = useMemo(() => {
     const nextDisplayed = new Map<string, Assignments>();
@@ -2489,122 +2421,152 @@ function TeamsContent() {
     [orderedScenarios, scenarioReorder ? scenarioReorder.scenarioId : null]
   );
 
-  const updateTeamsState = useCallback(
+  const updateScenarioTeams = useCallback(
     (
+      scenarioId: string,
       updater: (teams: Team[]) => Team[],
-      options?: { immediate?: boolean; skipSync?: boolean; syncScenarioAssignments?: boolean }
+      options?: { immediate?: boolean }
     ) => {
-      setTeams((currentTeams) => {
-        const nextTeams = normalizeTeams(updater(currentTeams), currentTeams);
-        const currentTeamIds = currentTeams.map((team) => team.id).join("|");
-        const nextTeamIds = nextTeams.map((team) => team.id).join("|");
-        const shouldSyncScenarioAssignments =
-          options?.syncScenarioAssignments ?? currentTeamIds !== nextTeamIds;
-
-        setScenarios((currentScenarios) => {
-          const nextScenarios = reconcileScenariosToTeams(currentScenarios, nextTeams);
-          if (shouldSyncScenarioAssignments && nextScenarios.length > 0) {
-            queueScenarioAssignmentsSync(
-              nextScenarios,
-              nextScenarios.map((scenario) => scenario.id),
-              options
-            );
+      setScenarios((currentScenarios) => {
+        let didChange = false;
+        const nextScenarios = currentScenarios.map((scenario) => {
+          if (scenario.id !== scenarioId) {
+            return scenario;
           }
-          return nextScenarios;
+
+          const updatedTeams = updater(scenario.teams)
+            .slice(0, MAX_TEAMS)
+            .map((team, index) => ({
+              ...team,
+              color: normalizeTeamColor(team.color, TEAM_COLOR_PALETTE[index] ?? TEAM_COLOR_PALETTE[0]),
+              displayOrder: index + 1
+            }));
+          const nextAssignments = reconcileAssignmentsToTeams(scenario.assignments, updatedTeams);
+
+          if (
+            areTeamsEqual(scenario.teams, updatedTeams) &&
+            areAssignmentsEqual(scenario.assignments, nextAssignments)
+          ) {
+            return scenario;
+          }
+
+          didChange = true;
+          return {
+            ...scenario,
+            teams: updatedTeams,
+            assignments: nextAssignments
+          };
         });
 
-        if (options?.skipSync) {
-          return nextTeams;
+        if (!didChange) {
+          return currentScenarios;
         }
 
-        if (!getTeamNameErrors(nextTeams).some((error) => error !== null)) {
-          queueTeamSync(nextTeams, options);
-        } else {
-          pendingTeamsRef.current = null;
-          if (teamSyncTimeoutRef.current) {
-            clearTimeout(teamSyncTimeoutRef.current);
-            teamSyncTimeoutRef.current = null;
-          }
-        }
-
-        return nextTeams;
+        queueScenarioTeamsSync(nextScenarios, [scenarioId], options);
+        queueScenarioAssignmentsSync(nextScenarios, [scenarioId], options);
+        return nextScenarios;
       });
     },
-    [queueScenarioAssignmentsSync, queueTeamSync]
+    [queueScenarioAssignmentsSync, queueScenarioTeamsSync]
   );
 
-  const updateTeamDraftName = useCallback((teamId: string, name: string) => {
-    setTeamDrafts((currentDrafts) => ({
+  const updateScenarioTeamDraftName = useCallback((scenarioId: string, teamId: string, name: string) => {
+    setScenarioTeamDrafts((currentDrafts) => ({
       ...currentDrafts,
-      [teamId]: {
-        name,
-        color:
-          currentDrafts[teamId]?.color ??
-          normalizeTeamColor(
-            latestTeamsRef.current.find((team) => team.id === teamId)?.color ?? TEAM_COLOR_PALETTE[0]
-          )
+      [scenarioId]: {
+        ...currentDrafts[scenarioId],
+        [teamId]: {
+          name,
+          color:
+            currentDrafts[scenarioId]?.[teamId]?.color ??
+            normalizeTeamColor(
+              latestScenariosRef.current
+                .find((scenario) => scenario.id === scenarioId)
+                ?.teams.find((team) => team.id === teamId)?.color ?? TEAM_COLOR_PALETTE[0]
+            )
+        }
       }
     }));
   }, []);
 
-  const commitTeamName = useCallback(
-    (teamId: string, options?: { immediate?: boolean }) => {
-      const draftName = teamDraftsRef.current[teamId]?.name ?? "";
-      const nextDraftTeams = latestTeamsRef.current.map((team, index) =>
-        team.id === teamId
-          ? {
-              ...team,
-              name: draftName,
-              color:
-                teamDraftsRef.current[team.id]?.color ??
-                normalizeTeamColor(team.color, TEAM_COLOR_PALETTE[index] ?? TEAM_COLOR_PALETTE[0])
-            }
-          : {
-              ...team,
-              name: teamDraftsRef.current[team.id]?.name ?? team.name,
-              color:
-                teamDraftsRef.current[team.id]?.color ??
-                normalizeTeamColor(team.color, TEAM_COLOR_PALETTE[index] ?? TEAM_COLOR_PALETTE[0])
-            }
-      );
+  const commitScenarioTeamName = useCallback(
+    (scenarioId: string, teamId: string, options?: { immediate?: boolean }) => {
+      const scenario = latestScenariosRef.current.find((candidate) => candidate.id === scenarioId);
+      if (!scenario) {
+        return;
+      }
 
+      const scenarioDrafts = scenarioTeamDraftsRef.current[scenarioId] ?? {};
+      const draftName = scenarioDrafts[teamId]?.name ?? "";
+      const nextDraftTeams = scenario.teams.map((team, index) => ({
+        ...team,
+        name: scenarioDrafts[team.id]?.name ?? team.name,
+        color:
+          scenarioDrafts[team.id]?.color ??
+          normalizeTeamColor(team.color, TEAM_COLOR_PALETTE[index] ?? TEAM_COLOR_PALETTE[0])
+      }));
       const nameErrors = getTeamNameErrors(nextDraftTeams);
       const teamIndex = nextDraftTeams.findIndex((team) => team.id === teamId);
       if (teamIndex === -1 || nameErrors[teamIndex]) {
         return;
       }
 
-      updateTeamsState(
+      updateScenarioTeams(
+        scenarioId,
         (currentTeams) =>
           currentTeams.map((team) => (team.id === teamId ? { ...team, name: draftName } : team)),
         options
       );
     },
-    [updateTeamsState]
+    [updateScenarioTeams]
   );
 
-  const updateTeamDraftColor = useCallback((teamId: string, color: string) => {
+  const scheduleScenarioTeamNameCommit = useCallback(
+    (scenarioId: string, teamId: string) => {
+      const key = getScenarioTeamCommitKey(scenarioId, teamId, "name");
+      const existingTimeout = scenarioTeamCommitTimeoutsRef.current.get(key);
+      if (existingTimeout) {
+        clearTimeout(existingTimeout);
+      }
+
+      const timeout = setTimeout(() => {
+        scenarioTeamCommitTimeoutsRef.current.delete(key);
+        commitScenarioTeamName(scenarioId, teamId);
+      }, TEAM_NAME_SCENARIO_COMMIT_DELAY_MS);
+
+      scenarioTeamCommitTimeoutsRef.current.set(key, timeout);
+    },
+    [commitScenarioTeamName]
+  );
+
+  const updateScenarioTeamDraftColor = useCallback((scenarioId: string, teamId: string, color: string) => {
     const normalizedColor = normalizeTeamColor(color);
-    setTeamDrafts((currentDrafts) => ({
+    setScenarioTeamDrafts((currentDrafts) => ({
       ...currentDrafts,
-      [teamId]: {
-        name:
-          currentDrafts[teamId]?.name ??
-          latestTeamsRef.current.find((team) => team.id === teamId)?.name ??
-          "",
-        color: normalizedColor
+      [scenarioId]: {
+        ...currentDrafts[scenarioId],
+        [teamId]: {
+          name:
+            currentDrafts[scenarioId]?.[teamId]?.name ??
+            latestScenariosRef.current
+              .find((scenario) => scenario.id === scenarioId)
+              ?.teams.find((team) => team.id === teamId)?.name ??
+            "",
+          color: normalizedColor
+        }
       }
     }));
   }, []);
 
-  const commitTeamColor = useCallback(
-    (teamId: string, options?: { immediate?: boolean; skipSync?: boolean }) => {
-      const draftColor = teamDraftsRef.current[teamId]?.color;
+  const commitScenarioTeamColor = useCallback(
+    (scenarioId: string, teamId: string, options?: { immediate?: boolean }) => {
+      const draftColor = scenarioTeamDraftsRef.current[scenarioId]?.[teamId]?.color;
       if (!draftColor) {
         return;
       }
 
-      updateTeamsState(
+      updateScenarioTeams(
+        scenarioId,
         (currentTeams) =>
           currentTeams.map((team) =>
             team.id === teamId ? { ...team, color: normalizeTeamColor(draftColor, team.color) } : team
@@ -2612,69 +2574,115 @@ function TeamsContent() {
         options
       );
     },
-    [updateTeamsState]
+    [updateScenarioTeams]
   );
 
-  const scheduleTeamColorScenarioCommit = useCallback(
-    (teamId: string) => {
-      const existingTimeout = teamColorCommitTimeoutsRef.current.get(teamId);
+  const scheduleScenarioTeamColorCommit = useCallback(
+    (scenarioId: string, teamId: string) => {
+      const key = getScenarioTeamCommitKey(scenarioId, teamId, "color");
+      const existingTimeout = scenarioTeamCommitTimeoutsRef.current.get(key);
       if (existingTimeout) {
         clearTimeout(existingTimeout);
       }
 
       const timeout = setTimeout(() => {
-        teamColorCommitTimeoutsRef.current.delete(teamId);
-        commitTeamColor(teamId, { skipSync: true });
+        scenarioTeamCommitTimeoutsRef.current.delete(key);
+        commitScenarioTeamColor(scenarioId, teamId);
       }, TEAM_COLOR_SCENARIO_COMMIT_DELAY_MS);
 
-      teamColorCommitTimeoutsRef.current.set(teamId, timeout);
+      scenarioTeamCommitTimeoutsRef.current.set(key, timeout);
     },
-    [commitTeamColor]
+    [commitScenarioTeamColor]
   );
 
-  const handleTeamColorChange = useCallback(
-    (teamId: string, color: string) => {
-      updateTeamDraftColor(teamId, color);
-      scheduleTeamColorScenarioCommit(teamId);
+  const handleScenarioTeamColorChange = useCallback(
+    (scenarioId: string, teamId: string, color: string) => {
+      updateScenarioTeamDraftColor(scenarioId, teamId, color);
+      scheduleScenarioTeamColorCommit(scenarioId, teamId);
     },
-    [scheduleTeamColorScenarioCommit, updateTeamDraftColor]
+    [scheduleScenarioTeamColorCommit, updateScenarioTeamDraftColor]
   );
 
-  const addTeam = useCallback(() => {
-    updateTeamsState((currentTeams) => {
-      if (currentTeams.length >= MAX_TEAMS) {
-        return currentTeams;
-      }
-
-      return [
-        ...currentTeams,
-        createTeam(currentTeams.length, currentTeams, run.slug)
-      ];
-    });
-  }, [run.slug, updateTeamsState]);
-
-  const removeTeam = useCallback(
-    (teamId: string) => {
-      if (teams.length <= 1) {
+  const addScenarioTeam = useCallback(
+    (scenarioId: string) => {
+      const scenario = latestScenariosRef.current.find((candidate) => candidate.id === scenarioId);
+      if (!scenario || scenario.teams.length >= MAX_TEAMS) {
         return;
       }
 
-      setOpenPickerSlot((current) => (current?.slot.teamId === teamId ? null : current));
-      setNearestSlot((current) =>
-        current?.slot.teamId === teamId ? null : current
-      );
-      setPreviewTarget((current) =>
-        current?.slot.teamId === teamId ? null : current
-      );
-      previewTargetRef.current =
-        previewTargetRef.current?.slot.teamId === teamId ? null : previewTargetRef.current;
+      pushScenarioUndoSnapshot(scenarioId);
+      updateScenarioTeams(scenarioId, (currentTeams) => [
+        ...currentTeams,
+        createTeam(currentTeams.length, currentTeams, run.slug)
+      ]);
+    },
+    [run.slug, updateScenarioTeams]
+  );
 
-      updateTeamsState(
-        (currentTeams) => currentTeams.filter((team) => team.id !== teamId),
-        { immediate: true, syncScenarioAssignments: true }
+  const renameScenarioTeam = useCallback(
+    (scenarioId: string, teamId: string) => {
+      const scenario = latestScenariosRef.current.find((candidate) => candidate.id === scenarioId);
+      if (!scenario) {
+        return;
+      }
+
+      const pendingCommitKey = getScenarioTeamCommitKey(scenarioId, teamId, "name");
+      const pendingTimeout = scenarioTeamCommitTimeoutsRef.current.get(pendingCommitKey);
+      if (pendingTimeout) {
+        clearTimeout(pendingTimeout);
+        scenarioTeamCommitTimeoutsRef.current.delete(pendingCommitKey);
+      }
+
+      const draftTeams = scenarioTeamDraftsRef.current[scenarioId] ?? {};
+      const existingNames = scenario.teams.map((team) => draftTeams[team.id]?.name ?? team.name);
+      const playerNames = POSITIONS.map((position) => scenario.assignments[teamId]?.[position] ?? null)
+        .map((playerId) => (playerId ? playerById.get(playerId)?.name.trim() ?? "" : ""))
+        .filter(Boolean);
+      const generatedName = generateScenarioTeamName({
+        playerNames,
+        existingNames
+      });
+
+      updateScenarioTeamDraftName(scenarioId, teamId, generatedName);
+      updateScenarioTeams(
+        scenarioId,
+        (currentTeams) =>
+          currentTeams.map((team) => (team.id === teamId ? { ...team, name: generatedName } : team)),
+        { immediate: true }
       );
     },
-    [teams.length, updateTeamsState]
+    [playerById, updateScenarioTeamDraftName, updateScenarioTeams]
+  );
+
+  const removeScenarioTeam = useCallback(
+    (scenarioId: string, teamId: string) => {
+      const scenario = latestScenariosRef.current.find((candidate) => candidate.id === scenarioId);
+      if (!scenario || scenario.teams.length <= 1) {
+        return;
+      }
+
+      pushScenarioUndoSnapshot(scenarioId);
+      setOpenPickerSlot((current) =>
+        current?.scenarioId === scenarioId && current.slot.teamId === teamId ? null : current
+      );
+      setNearestSlot((current) =>
+        current?.scenarioId === scenarioId && current.slot.teamId === teamId ? null : current
+      );
+      setPreviewTarget((current) =>
+        current?.scenarioId === scenarioId && current.slot.teamId === teamId ? null : current
+      );
+      previewTargetRef.current =
+        previewTargetRef.current?.scenarioId === scenarioId && previewTargetRef.current.slot.teamId === teamId
+          ? null
+          : previewTargetRef.current;
+
+      updateScenarioTeams(
+        scenarioId,
+        (currentTeams) => currentTeams.filter((team) => team.id !== teamId),
+        { immediate: true }
+      );
+    },
+    [updateScenarioTeams]
   );
 
   const updateScenarioAssignments = (
@@ -2721,6 +2729,7 @@ function TeamsContent() {
     }
 
     const nextEntry: ScenarioHistoryEntry = {
+      teams: cloneTeams(scenario.teams),
       assignments: cloneAssignments(scenario.assignments),
       summary: cloneScenarioActionSummary(scenarioActionSummariesRef.current[scenarioId] ?? null)
     };
@@ -2731,6 +2740,7 @@ function TeamsContent() {
 
       if (
         previousEntry &&
+        areTeamsEqual(previousEntry.teams, nextEntry.teams) &&
         areAssignmentsEqual(previousEntry.assignments, nextEntry.assignments) &&
         areScenarioActionSummariesEqual(previousEntry.summary, nextEntry.summary)
       ) {
@@ -2783,9 +2793,22 @@ function TeamsContent() {
       setOpenPickerSlot((current) => (current?.scenarioId === scenarioId ? null : current));
       setSelectedAvailablePlayer((current) => (current?.scenarioId === scenarioId ? null : current));
       setScenarioActionSummary(scenarioId, entry.summary);
-      updateScenarioAssignments(scenarioId, () => cloneAssignments(entry.assignments));
+      setScenarios((current) => {
+        const nextScenarios = current.map((scenario) =>
+          scenario.id === scenarioId
+            ? {
+                ...scenario,
+                teams: cloneTeams(entry.teams),
+                assignments: cloneAssignments(entry.assignments)
+              }
+            : scenario
+        );
+        queueScenarioTeamsSync(nextScenarios, [scenarioId], { immediate: true });
+        queueScenarioAssignmentsSync(nextScenarios, [scenarioId], { immediate: true });
+        return nextScenarios;
+      });
     },
-    [setScenarioActionSummary]
+    [queueScenarioAssignmentsSync, queueScenarioTeamsSync, setScenarioActionSummary]
   );
 
   const undoScenarioAssignments = useCallback(
@@ -2900,7 +2923,12 @@ function TeamsContent() {
   };
 
   const resetScenarioAssignments = (scenarioId: string) => {
-    applyScenarioAssignmentsChange(scenarioId, () => createEmptyAssignments(teams), {
+    const scenario = scenarioById.get(scenarioId);
+    if (!scenario) {
+      return;
+    }
+
+    applyScenarioAssignmentsChange(scenarioId, () => createEmptyAssignments(scenario.teams), {
       summary: null
     });
   };
@@ -2918,7 +2946,7 @@ function TeamsContent() {
       return;
     }
 
-    const hasEmptySlot = teams.some((team) =>
+    const hasEmptySlot = scenario.teams.some((team) =>
       POSITIONS.some((position) => (scenario.assignments[team.id]?.[position] ?? null) === null)
     );
 
@@ -2931,9 +2959,9 @@ function TeamsContent() {
       "randomize",
       () =>
         chooseBestRandomizedAssignments(
-          scenario.assignments,
-          teams,
-          availablePlayers,
+        scenario.assignments,
+        scenario.teams,
+        availablePlayers,
           REMAINING_ASSIGNMENT_ATTEMPTS,
           playerById
         )
@@ -2956,7 +2984,7 @@ function TeamsContent() {
       return;
     }
 
-    const hasEmptySlot = teams.some((team) =>
+    const hasEmptySlot = scenario.teams.some((team) =>
       POSITIONS.some((position) => (scenario.assignments[team.id]?.[position] ?? null) === null)
     );
 
@@ -2971,7 +2999,7 @@ function TeamsContent() {
       () =>
         chooseBestBalancedAssignments(
           scenario.assignments,
-          teams,
+          scenario.teams,
           availablePlayers,
           playerById,
           REMAINING_ASSIGNMENT_ATTEMPTS,
@@ -2993,7 +3021,7 @@ function TeamsContent() {
       return;
     }
 
-    const hasEmptySlot = teams.some((team) =>
+    const hasEmptySlot = scenario.teams.some((team) =>
       POSITIONS.some((position) => (scenario.assignments[team.id]?.[position] ?? null) === null)
     );
 
@@ -3003,9 +3031,9 @@ function TeamsContent() {
 
     beginScenarioAction(scenarioId, "balanceMatchup", () =>
       chooseBestMatchupBalancedAssignments(
-        scenario.assignments,
-        teams,
-        availablePlayers,
+          scenario.assignments,
+          scenario.teams,
+          availablePlayers,
         REMAINING_ASSIGNMENT_ATTEMPTS,
         matchupLookup
       )
@@ -3095,10 +3123,11 @@ function TeamsContent() {
   };
 
   const addScenario = () => {
-    const nextScenario = createScenario(nextScenarioNumber, teams);
+    const nextScenario = createScenario(nextScenarioNumber, run.slug);
     setScenarios((current) => {
       const nextScenarios = [...current, nextScenario];
       queueScenarioMetaSync(nextScenarios);
+      queueScenarioTeamsSync(nextScenarios, [nextScenario.id]);
       return nextScenarios;
     });
     setNextScenarioNumber((current) => Math.max(current + 1, nextScenarioNumber + 1));
@@ -3135,10 +3164,11 @@ function TeamsContent() {
     setScenarios((current) => {
       const nextScenarios = current.filter((scenario) => scenario.id !== deletedScenarioId);
       queueScenarioMetaSync(nextScenarios, { immediate: true });
+      queueScenarioTeamsSync(nextScenarios, [deletedScenarioId], { immediate: true });
       queueScenarioAssignmentsSync(nextScenarios, [deletedScenarioId], { immediate: true });
       return nextScenarios;
     });
-  }, [queueScenarioAssignmentsSync, queueScenarioMetaSync, scenarioPendingDeleteId]);
+  }, [queueScenarioAssignmentsSync, queueScenarioMetaSync, queueScenarioTeamsSync, scenarioPendingDeleteId]);
 
   useEffect(() => {
     if (!scenarioPendingDeleteId) {
@@ -3395,28 +3425,26 @@ function TeamsContent() {
     >
       <div className="status-bar">
         {loading ? <div className="status-chip">Loading roster seed...</div> : null}
-        {hasCommittedTeamValidationError ? (
-          <div className="status-chip error" role="status">
-            Resolve duplicate or blank team names before syncing teams.
-          </div>
-        ) : null}
         {playerSyncError ? (
           <button type="button" className="status-chip error" onClick={retrySync}>
             {playerSyncError} Retry roster sync
           </button>
         ) : null}
-        {teamSyncError ? (
+        {scenarioTeamSyncError ? (
           <button
             type="button"
             className="status-chip error"
             onClick={() => {
-              if (latestTeamsRef.current && !hasCommittedTeamValidationError) {
-                pendingTeamsRef.current = latestTeamsRef.current;
-                void flushPendingTeamScenarioSync();
+              if (latestScenariosRef.current) {
+                pendingScenarioTeamsRef.current = latestScenariosRef.current;
+                dirtyScenarioTeamIdsRef.current = new Set(
+                  latestScenariosRef.current.map((scenario) => scenario.id)
+                );
+                void flushPendingScenarioSync();
               }
             }}
           >
-            {teamSyncError} Retry team sync
+            {scenarioTeamSyncError} Retry scenario team sync
           </button>
         ) : null}
         {scenarioSyncError ? (
@@ -3430,7 +3458,7 @@ function TeamsContent() {
                 dirtyScenarioAssignmentIdsRef.current = new Set(
                   latestScenariosRef.current.map((scenario) => scenario.id)
                 );
-                void flushPendingTeamScenarioSync();
+                void flushPendingScenarioSync();
               }
             }}
           >
@@ -3444,77 +3472,12 @@ function TeamsContent() {
         ) : null}
       </div>
       <div className="scenario-stack">
-        <section className="panel team-config-shell">
-          <div className="team-config-header">
-            <h2 className="team-config-title">Setup Teams</h2>
-          </div>
-          <div className="team-config-grid">
-            {teams.map((team, index) => (
-              <div key={team.id} className="team-config-card">
-                <div className="team-config-card-head">
-                  <span className="team-config-index">Team {index + 1}</span>
-                  <button
-                    type="button"
-                    className="team-config-remove-button"
-                    onClick={() => removeTeam(team.id)}
-                    disabled={teams.length <= 1 || Boolean(dragState) || Boolean(scenarioReorder)}
-                  >
-                    Remove
-                  </button>
-                </div>
-                <div className="team-config-name-row">
-                  <input
-                    type="text"
-                    className={`team-config-name-input${teamNameErrors[index] ? " invalid" : ""}`}
-                    value={teamDrafts[team.id]?.name ?? team.name}
-                    onChange={(event) => updateTeamDraftName(team.id, event.target.value)}
-                    onBlur={() => commitTeamName(team.id, { immediate: true })}
-                    placeholder={`Team ${index + 1}`}
-                    spellCheck={false}
-                    disabled={Boolean(dragState) || Boolean(scenarioReorder)}
-                  />
-                  <label className="team-config-color-row">
-                    <input
-                      type="color"
-                      className="team-config-color-input"
-                      value={teamDrafts[team.id]?.color ?? normalizeTeamColor(team.color, TEAM_COLOR_PALETTE[index] ?? TEAM_COLOR_PALETTE[0])}
-                      onChange={(event) => handleTeamColorChange(team.id, event.target.value)}
-                      onBlur={() => {
-                        const pendingTimeout = teamColorCommitTimeoutsRef.current.get(team.id);
-                        if (pendingTimeout) {
-                          clearTimeout(pendingTimeout);
-                          teamColorCommitTimeoutsRef.current.delete(team.id);
-                        }
-                        commitTeamColor(team.id, { immediate: true });
-                      }}
-                      disabled={Boolean(dragState) || Boolean(scenarioReorder)}
-                    />
-                  </label>
-                </div>
-                {teamNameErrors[index] ? (
-                  <div className="team-config-error">{teamNameErrors[index]}</div>
-                ) : null}
-              </div>
-            ))}
-            {teams.length < MAX_TEAMS ? (
-              <div className="team-config-add-slot">
-                <button
-                  type="button"
-                  className="team-config-add-button"
-                  onClick={addTeam}
-                  disabled={Boolean(dragState) || Boolean(scenarioReorder)}
-                >
-                  Add Team
-                </button>
-              </div>
-            ) : null}
-          </div>
-        </section>
-        <div className="scenario-section-divider" aria-hidden="true" />
         {orderedScenarios.map((scenario) => {
           const displayedAssignments =
             displayedAssignmentsByScenario.get(scenario.id) ?? scenario.assignments;
-          const scenarioCharts = buildScenarioAttributeCharts(scenario.assignments, playerById, teams);
+          const scenarioDraftTeams = draftTeamsByScenario.get(scenario.id) ?? scenario.teams;
+          const scenarioTeamNameErrors = teamNameErrorsByScenario[scenario.id] ?? [];
+          const scenarioCharts = buildScenarioAttributeCharts(scenario.assignments, playerById, scenario.teams);
           const scenarioMatchupReport = scenarioMatchupReports[scenario.id];
           const availablePlayers = availablePlayersByScenario.get(scenario.id) ?? [];
           const hasAssignablePoolPlayers = availablePlayers.some(canPlayerBeAssignedFromPool);
@@ -3533,15 +3496,15 @@ function TeamsContent() {
             currentScenarioSummary &&
               currentScenarioSummary.currentIndex < currentScenarioSummary.candidates.length - 1
           );
-          const hasOpenSlots = teams.some((team) =>
+          const hasOpenSlots = scenario.teams.some((team) =>
             POSITIONS.some((position) => (scenario.assignments[team.id]?.[position] ?? null) === null)
           );
-          const hasAssignedPlayers = teams.some((team) =>
+          const hasAssignedPlayers = scenario.teams.some((team) =>
             POSITIONS.some((position) => (scenario.assignments[team.id]?.[position] ?? null) !== null)
           );
           const analyticsMode = analyticsModeByScenario[scenario.id] ?? "matchup";
           const isScenarioComplete =
-            countFilledAssignments(scenario.assignments) === teams.length * POSITIONS.length;
+            countFilledAssignments(scenario.assignments) === scenario.teams.length * POSITIONS.length;
           const swapSuggestions = scenarioMatchupSwapSuggestions[scenario.id] ?? {
             goal1: null,
             goal2: null,
@@ -3869,12 +3832,42 @@ function TeamsContent() {
                     </div>
                   </div>
                   <div className="teams-grid">
-                    {teams.map((team, teamIndex) => (
+                    {scenario.teams.map((team, teamIndex) => (
                       <TeamColumn
                         key={team.id}
                         scenarioId={scenario.id}
                         team={team}
                         teamIndex={teamIndex}
+                        teamNameError={scenarioTeamNameErrors[teamIndex] ?? null}
+                        draftName={scenarioDraftTeams[teamIndex]?.name ?? team.name}
+                        draftColor={scenarioDraftTeams[teamIndex]?.color ?? team.color}
+                        canRemoveTeam={scenario.teams.length > 1}
+                        teamEditingDisabled={Boolean(dragState) || Boolean(scenarioReorder)}
+                        onNameChange={(value) => {
+                          updateScenarioTeamDraftName(scenario.id, team.id, value);
+                          scheduleScenarioTeamNameCommit(scenario.id, team.id);
+                        }}
+                        onNameCommit={(options) => {
+                          const key = getScenarioTeamCommitKey(scenario.id, team.id, "name");
+                          const pendingTimeout = scenarioTeamCommitTimeoutsRef.current.get(key);
+                          if (pendingTimeout) {
+                            clearTimeout(pendingTimeout);
+                            scenarioTeamCommitTimeoutsRef.current.delete(key);
+                          }
+                          commitScenarioTeamName(scenario.id, team.id, options);
+                        }}
+                        onColorChange={(value) => handleScenarioTeamColorChange(scenario.id, team.id, value)}
+                        onColorCommit={(options) => {
+                          const key = getScenarioTeamCommitKey(scenario.id, team.id, "color");
+                          const pendingTimeout = scenarioTeamCommitTimeoutsRef.current.get(key);
+                          if (pendingTimeout) {
+                            clearTimeout(pendingTimeout);
+                            scenarioTeamCommitTimeoutsRef.current.delete(key);
+                          }
+                          commitScenarioTeamColor(scenario.id, team.id, options);
+                        }}
+                        onRemoveTeam={() => removeScenarioTeam(scenario.id, team.id)}
+                        onRenameTeam={() => renameScenarioTeam(scenario.id, team.id)}
                         assignments={displayedAssignments[team.id] ?? createEmptyAssignments([team])[team.id]}
                         registerCell={(slot) => (node) => {
                           const key = getScenarioSlotKey(scenario.id, slot);
@@ -3957,6 +3950,16 @@ function TeamsContent() {
                         onClear={(slot) => clearScenarioSlot(scenario.id, slot)}
                       />
                     ))}
+                    {scenario.teams.length < MAX_TEAMS ? (
+                      <button
+                        type="button"
+                        className="team-inline-add-card"
+                        onClick={() => addScenarioTeam(scenario.id)}
+                        disabled={Boolean(dragState) || Boolean(scenarioReorder)}
+                      >
+                        Add Team
+                      </button>
+                    ) : null}
                   </div>
                   <ScenarioAnalyticsSection
                     analyticsMode={analyticsMode}
@@ -3966,7 +3969,7 @@ function TeamsContent() {
                     goal2SwapHelperText={goal2SwapSuggestionText}
                     goal3SwapHelperText={goal3SwapSuggestionText}
                     playersById={playerById}
-                    teams={teams}
+                    teams={scenario.teams}
                     onAnalyticsModeChange={(mode) =>
                       setAnalyticsModeByScenario((current) => ({
                         ...current,
@@ -4101,6 +4104,17 @@ function TeamColumn({
   scenarioId,
   team,
   teamIndex,
+  teamNameError,
+  draftName,
+  draftColor,
+  canRemoveTeam,
+  teamEditingDisabled,
+  onNameChange,
+  onNameCommit,
+  onRemoveTeam,
+  onRenameTeam,
+  onColorChange,
+  onColorCommit,
   assignments,
   registerCell,
   registerWrap,
@@ -4119,6 +4133,17 @@ function TeamColumn({
   scenarioId: string;
   team: Team;
   teamIndex: number;
+  teamNameError: string | null;
+  draftName: string;
+  draftColor: string;
+  canRemoveTeam: boolean;
+  teamEditingDisabled: boolean;
+  onNameChange: (value: string) => void;
+  onNameCommit: (options?: { immediate?: boolean }) => void;
+  onRemoveTeam: () => void;
+  onRenameTeam: () => void;
+  onColorChange: (value: string) => void;
+  onColorCommit: (options?: { immediate?: boolean }) => void;
   assignments: Record<Position, number | null>;
   registerCell: (slot: SlotDescriptor) => (node: HTMLDivElement | null) => void;
   registerWrap: (slot: SlotDescriptor) => (node: HTMLDivElement | null) => void;
@@ -4135,13 +4160,69 @@ function TeamColumn({
   onClear: (slot: SlotDescriptor) => void;
 }) {
   const teamLabel = getTeamDisplayName(team, teamIndex);
+  const nameInputRef = useRef<HTMLTextAreaElement | null>(null);
+
+  useLayoutEffect(() => {
+    const node = nameInputRef.current;
+    if (!node) {
+      return;
+    }
+
+    const computedStyle = window.getComputedStyle(node);
+    const lineHeight = Number.parseFloat(computedStyle.lineHeight) || 0;
+    const paddingTop = Number.parseFloat(computedStyle.paddingTop) || 0;
+    const paddingBottom = Number.parseFloat(computedStyle.paddingBottom) || 0;
+    const borderBottomWidth = Number.parseFloat(computedStyle.borderBottomWidth) || 0;
+    const minHeight = lineHeight + paddingTop + paddingBottom + borderBottomWidth;
+    const maxHeight = lineHeight * 2 + paddingTop + paddingBottom + borderBottomWidth;
+
+    node.style.height = "0px";
+    node.style.height = `${Math.min(Math.max(node.scrollHeight, minHeight), maxHeight)}px`;
+  }, [draftName]);
 
   return (
     <section className="team-card">
-      <div className="team-name" style={{ background: team.color }}>
-        {getChartTeamLabelLines(teamLabel).map((line) => (
-          <span key={line}>{line}</span>
-        ))}
+      <div className="team-name team-name-editor">
+        <div className="team-name-toolbar">
+          <button
+            type="button"
+            className="team-config-remove-button team-inline-remove-button"
+            onClick={onRemoveTeam}
+            disabled={!canRemoveTeam || teamEditingDisabled}
+          >
+            Remove
+          </button>
+          <button
+            type="button"
+            className="team-config-remove-button team-inline-rename-button"
+            onClick={onRenameTeam}
+            disabled={teamEditingDisabled}
+          >
+            Name Generator
+          </button>
+          <label className="team-config-color-row">
+            <input
+              type="color"
+              className="team-config-color-input"
+              value={draftColor}
+              onChange={(event) => onColorChange(event.target.value)}
+              onBlur={() => onColorCommit({ immediate: true })}
+              disabled={teamEditingDisabled}
+            />
+          </label>
+        </div>
+        <textarea
+          ref={nameInputRef}
+          className={`team-inline-name-input${teamNameError ? " invalid" : ""}`}
+          value={draftName}
+          onChange={(event) => onNameChange(event.target.value.replace(/\s*\n+\s*/g, " "))}
+          onBlur={() => onNameCommit({ immediate: true })}
+          placeholder={`Team ${teamIndex + 1}`}
+          spellCheck={false}
+          disabled={teamEditingDisabled}
+          rows={1}
+        />
+        {teamNameError ? <div className="team-inline-error">{teamNameError}</div> : null}
       </div>
       <div className="team-slots">
         {POSITIONS.map((position) => {
@@ -4524,6 +4605,14 @@ function ScenarioAnalyticsSection({
       </div>
       {analyticsMode === "stats" ? (
         <ScenarioAttributeCharts charts={charts} />
+      ) : teams.length < 2 ? (
+        <section className="scenario-matchup-analytics" aria-label="Team matchup comparison">
+          <div className="scenario-chart-card scenario-matchup-card">
+            <div className="scenario-matchup-empty">
+              Add at least two teams in this scenario to compare matchups.
+            </div>
+          </div>
+        </section>
       ) : (
         <ScenarioMatchupCharts
           report={matchupReport}

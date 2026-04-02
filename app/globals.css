@@ -1343,21 +1343,34 @@ select {
 }
 
 .team-config-color-row {
-  display: flex;
-  align-items: center;
-  margin-left: auto;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: 10px;
   cursor: pointer;
 }
 
 .team-config-color-input {
-  width: 44px;
-  min-width: 44px;
+  display: block;
+  width: 100%;
+  min-width: 0;
   height: 32px;
   border: 0;
   border-radius: 10px;
   padding: 0;
   background: transparent;
   cursor: pointer;
+}
+
+.team-config-color-input::-webkit-color-swatch-wrapper {
+  padding: 0;
+  border-radius: 10px;
+}
+
+.team-config-color-input::-webkit-color-swatch {
+  border: 0;
+  border-radius: 10px;
 }
 
 .team-config-add-slot {
@@ -1450,6 +1463,89 @@ select {
 
 .team-name span {
   display: block;
+}
+
+.team-name-editor {
+  align-content: stretch;
+  justify-items: stretch;
+  gap: 6px;
+  min-height: 108px;
+  padding: 8px;
+  font-size: 1rem;
+}
+
+.team-name-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.team-inline-name-input {
+  width: 100%;
+  border: 0;
+  border-bottom: 2px solid rgba(255, 255, 255, 0.72);
+  border-radius: 0;
+  padding: 0 2px 4px;
+  background: transparent;
+  color: #ffffff;
+  caret-color: #ffffff;
+  font-family: inherit;
+  font-size: clamp(1.22rem, 1.08rem + 0.5vw, 1.6rem);
+  font-weight: 800;
+  text-align: center;
+  line-height: 1.05;
+  resize: none;
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.team-inline-name-input.invalid {
+  border-bottom-color: rgba(214, 80, 80, 0.9);
+  box-shadow: none;
+}
+
+.team-inline-name-input:focus-visible {
+  outline: none;
+  border-bottom-color: rgba(255, 255, 255, 1);
+}
+
+.team-inline-error {
+  min-height: 16px;
+  color: rgba(122, 14, 14, 0.9);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.team-inline-remove-button,
+.team-inline-rename-button {
+  width: 100%;
+  min-height: 32px;
+  padding: 4px 7px;
+  font-size: 0.8rem;
+}
+
+.team-inline-rename-button {
+  padding-inline: 10px;
+}
+
+.team-inline-add-card {
+  min-height: 108px;
+  border: 1px dashed rgba(255, 255, 255, 0.24);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.team-inline-add-card:disabled {
+  opacity: 0.56;
+  cursor: not-allowed;
 }
 
 .team-slots {

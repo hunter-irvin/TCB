@@ -1,4 +1,4 @@
-import { LEGACY_TEAM_COLOR_BY_TOKEN, MAX_TEAMS, TEAM_COLOR_PALETTE, TEAMS } from "@/lib/constants";
+import { LEGACY_TEAM_COLOR_BY_TOKEN, MAX_TEAMS, POSITIONS, TEAM_COLOR_PALETTE, TEAMS } from "@/lib/constants";
 import { createEmptyAssignments, createEmptyPlayerChemistry, sanitizePlayers } from "@/lib/state";
 import type {
   Assignments,
@@ -41,22 +41,22 @@ export type DbPlayerInsertRow = Omit<DbPlayerRow, "id">;
 export const PLAYER_SELECT_COLUMNS =
   "id,run_id,row_number,active,name,eligible_positions,shooting,driving,assisting,man_defense,help_defense,shot_blocking,playmaking,rebounding,transition";
 export const PLAYER_CHEMISTRY_SELECT_COLUMNS = "run_id,source_player_id,target_player_id,kind";
-export const TEAM_SELECT_COLUMNS = "id,run_id,name,color,display_order";
 export const TEAM_SCENARIO_SELECT_COLUMNS = "id,run_id,title,sort_order";
-
-type DbTeamRow = {
-  id: string;
-  run_id?: string;
-  name: string;
-  color: string;
-  display_order: number;
-};
+export const SCENARIO_TEAM_SELECT_COLUMNS = "scenario_id,team_id,name,color,display_order";
 
 type DbTeamScenarioRow = {
   id: string;
   run_id?: string;
   title: string;
   sort_order: number;
+};
+
+type DbScenarioTeamRow = {
+  scenario_id: string;
+  team_id: string;
+  name: string;
+  color: string;
+  display_order: number;
 };
 
 type DbScenarioAssignmentRow = {
@@ -66,7 +66,7 @@ type DbScenarioAssignmentRow = {
   player_id: number | null;
 };
 
-export const TEAM_SCENARIOS_STORAGE_KEY = "tcb-team-scenarios";
+export const TEAM_SCENARIOS_STORAGE_KEY = "tcb-team-scenarios-v2";
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -88,13 +88,6 @@ export function createScenarioId() {
 
 export function isUuid(value: string) {
   return UUID_PATTERN.test(value);
-}
-
-export function normalizeScenarioIds(scenarios: Scenario[]) {
-  return scenarios.map((scenario) => ({
-    ...scenario,
-    id: isUuid(scenario.id) ? scenario.id : createScenarioId()
-  }));
 }
 
 function normalizeHexColor(color: string) {
@@ -129,10 +122,7 @@ export function normalizeTeamColor(
   return fallbackColor;
 }
 
-export function normalizeTeams(
-  teams: Team[],
-  fallbackTeams: Team[] = TEAMS
-): Team[] {
+export function normalizeTeams(teams: Team[], fallbackTeams: Team[] = TEAMS): Team[] {
   const fallbackById = new Map(fallbackTeams.map((team) => [team.id, team] as const));
 
   return teams
@@ -251,37 +241,30 @@ export function playersFromRows(
   );
 }
 
-export function teamFromRow(row: DbTeamRow, fallbackTeam: Team): Team {
+function teamFromScenarioRow(row: DbScenarioTeamRow, fallbackTeam: Team): Team {
   return {
-    id: row.id,
+    id: row.team_id,
     name: row.name,
     color: normalizeTeamColor(row.color, fallbackTeam.color),
     displayOrder: row.display_order
   };
 }
 
-export function teamsFromRows(rows: DbTeamRow[], fallbackTeams: Team[] = TEAMS): Team[] {
+export function scenarioTeamsFromRows(
+  rows: DbScenarioTeamRow[],
+  fallbackTeams: Team[] = []
+): Team[] {
   if (rows.length === 0) {
-    return [];
+    return fallbackTeams.length > 0 ? normalizeTeams(fallbackTeams, fallbackTeams) : [];
   }
 
   return normalizeTeams(
     rows
       .slice()
       .sort((left, right) => left.display_order - right.display_order)
-      .map((row, index) => teamFromRow(row, fallbackTeams[index] ?? TEAMS[index] ?? TEAMS[0])),
+      .map((row, index) => teamFromScenarioRow(row, fallbackTeams[index] ?? TEAMS[index] ?? TEAMS[0])),
     fallbackTeams
   );
-}
-
-export function teamsToRows(teams: Team[], runId: string) {
-  return teams.map((team, index) => ({
-    id: team.id,
-    run_id: runId,
-    name: team.name,
-    color: normalizeTeamColor(team.color, TEAM_COLOR_PALETTE[index] ?? TEAM_COLOR_PALETTE[0]),
-    display_order: index + 1
-  }));
 }
 
 function serializeTeams(teams: Team[]) {
@@ -312,29 +295,86 @@ export function buildAssignmentsFromRows(rows: DbScenarioAssignmentRow[], teams:
   return assignments;
 }
 
+function normalizeScenarioAssignments(assignments: Assignments | undefined, teams: Team[]) {
+  const nextAssignments = createEmptyAssignments(teams);
+
+  if (!assignments || typeof assignments !== "object") {
+    return nextAssignments;
+  }
+
+  for (const team of teams) {
+    const currentTeamAssignments = assignments[team.id];
+    if (!currentTeamAssignments || typeof currentTeamAssignments !== "object") {
+      continue;
+    }
+
+    for (const position of POSITIONS) {
+      const playerId = currentTeamAssignments[position];
+      nextAssignments[team.id][position] =
+        typeof playerId === "number" && Number.isInteger(playerId) ? playerId : null;
+    }
+  }
+
+  return nextAssignments;
+}
+
+export function normalizeScenarioIds(scenarios: Scenario[]) {
+  return scenarios.map((scenario, index) => {
+    const fallbackTeams = scenario.teams?.length ? scenario.teams : TEAMS.slice(0, 2);
+    const teams = normalizeTeams(fallbackTeams, fallbackTeams);
+
+    return {
+      ...scenario,
+      id: isUuid(scenario.id) ? scenario.id : createScenarioId(),
+      title: scenario.title || `Team Scenario ${index + 1}`,
+      teams,
+      assignments: normalizeScenarioAssignments(scenario.assignments, teams),
+      collapsed: Boolean(scenario.collapsed)
+    };
+  });
+}
+
 export function buildScenarioState(
   scenarios: DbTeamScenarioRow[],
+  scenarioTeamRows: DbScenarioTeamRow[],
   assignmentRows: DbScenarioAssignmentRow[],
-  localScenarios: Scenario[] = [],
-  teams: Team[] = TEAMS
+  localScenarios: Scenario[] = []
 ): Scenario[] {
   const collapsedById = new Map(localScenarios.map((scenario) => [scenario.id, scenario.collapsed]));
-  const rowsByScenario = assignmentRows.reduce<Map<string, DbScenarioAssignmentRow[]>>((acc, row) => {
+  const localTeamsByScenarioId = new Map(localScenarios.map((scenario) => [scenario.id, scenario.teams] as const));
+  const teamRowsByScenario = scenarioTeamRows.reduce<Map<string, DbScenarioTeamRow[]>>((acc, row) => {
     const current = acc.get(row.scenario_id) ?? [];
     current.push(row);
     acc.set(row.scenario_id, current);
     return acc;
   }, new Map());
+  const assignmentRowsByScenario = assignmentRows.reduce<Map<string, DbScenarioAssignmentRow[]>>(
+    (acc, row) => {
+      const current = acc.get(row.scenario_id) ?? [];
+      current.push(row);
+      acc.set(row.scenario_id, current);
+      return acc;
+    },
+    new Map()
+  );
 
   return scenarios
     .slice()
     .sort((left, right) => left.sort_order - right.sort_order)
-    .map((scenario) => ({
-      id: scenario.id,
-      title: scenario.title,
-      assignments: buildAssignmentsFromRows(rowsByScenario.get(scenario.id) ?? [], teams),
-      collapsed: collapsedById.get(scenario.id) ?? false
-    }));
+    .map((scenario, index) => {
+      const teams = scenarioTeamsFromRows(
+        teamRowsByScenario.get(scenario.id) ?? [],
+        localTeamsByScenarioId.get(scenario.id) ?? []
+      );
+
+      return {
+        id: scenario.id,
+        title: scenario.title || `Team Scenario ${index + 1}`,
+        teams,
+        assignments: buildAssignmentsFromRows(assignmentRowsByScenario.get(scenario.id) ?? [], teams),
+        collapsed: collapsedById.get(scenario.id) ?? false
+      };
+    });
 }
 
 export function scenarioAssignmentsToRows(scenarioId: string, assignments: Assignments) {
@@ -349,6 +389,17 @@ export function scenarioAssignmentsToRows(scenarioId: string, assignments: Assig
         updated_at: new Date().toISOString()
       }))
   );
+}
+
+export function scenarioTeamsToRows(scenario: Scenario) {
+  return scenario.teams.map((team, index) => ({
+    scenario_id: scenario.id,
+    team_id: team.id,
+    name: team.name,
+    color: normalizeTeamColor(team.color, TEAM_COLOR_PALETTE[index] ?? TEAM_COLOR_PALETTE[0]),
+    display_order: index + 1,
+    updated_at: new Date().toISOString()
+  }));
 }
 
 export function scenariosToRows(scenarios: Scenario[], runId: string) {
@@ -395,17 +446,18 @@ export function areScenariosEquivalent(left: Scenario[], right: Scenario[]) {
         Boolean(other) &&
         scenario.id === other.id &&
         scenario.title === other.title &&
+        areTeamsEqual(scenario.teams, other.teams) &&
         areAssignmentsEqual(scenario.assignments, other.assignments)
       );
     })
   );
 }
 
-export function isScenarioPristine(scenarios: Scenario[], teams: Team[] = TEAMS) {
+export function isScenarioPristine(scenarios: Scenario[]) {
   return (
     scenarios.length === 1 &&
     scenarios[0].title === "Team Scenario 1" &&
-    areAssignmentsEqual(scenarios[0].assignments, createEmptyAssignments(teams))
+    areAssignmentsEqual(scenarios[0].assignments, createEmptyAssignments(scenarios[0].teams))
   );
 }
 
@@ -429,14 +481,17 @@ export function parseStoredScenarioState(value: string | null): PersistedScenari
       return null;
     }
 
-    const storedTeams = Array.isArray(parsed.teams) && parsed.teams.length > 0
-      ? normalizeTeams(parsed.teams)
-      : normalizeTeams(TEAMS);
+    const scenarios = normalizeScenarioIds(parsed.scenarios).filter(
+      (scenario) => Array.isArray(scenario.teams) && scenario.teams.length > 0
+    );
+
+    if (scenarios.length === 0) {
+      return null;
+    }
 
     return {
       nextScenarioNumber: parsed.nextScenarioNumber,
-      scenarios: normalizeScenarioIds(parsed.scenarios),
-      teams: storedTeams
+      scenarios
     };
   } catch {
     return null;

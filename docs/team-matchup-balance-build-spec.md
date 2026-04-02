@@ -149,6 +149,16 @@ The first version should:
 
 ## User-Facing Behavior
 
+### Shipped UI Refinements
+
+The shipped Teams page now includes these matchup-related refinements on top of the original build scope:
+
+- `Matchup Comparison` is the default analysis mode shown for each scenario
+- the `Optimization Results` card surfaces separate suggested swaps for `Goal 1`, `Goal 2`, and `Goal 3`
+- the goal-specific recommendation copy uses the form `Trade [player 1] and [player 2] to improve Goal X.`
+- the `Goal 2` total mismatch score bar now uses a `0..25` visual extent
+- matchup comparison cards now show full team names instead of shortened labels where space allows
+
 ### Scenario Generation
 
 The Teams page will keep the current scenario generation approach:
