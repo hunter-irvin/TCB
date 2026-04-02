@@ -1,11 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { AppShell } from "@/components/app-shell";
 import { useRun } from "@/components/run-provider";
 import { TournamentBuilderProvider, useTournamentBuilder } from "@/components/tournament-builder";
-import { DEFAULT_RUN_SLUG, buildRunScopedStorageKey } from "@/lib/runs";
+import { DEFAULT_RUN_SLUG, buildRunApiPath, buildRunScopedStorageKey } from "@/lib/runs";
 import {
   MAX_TEAMS,
   PLAYER_ATTRIBUTE_GROUPS,
@@ -34,6 +34,22 @@ import {
   teamsFromRows,
   teamsToRows
 } from "@/lib/supabase/tcb";
+import {
+  buildMatchupScoreLookup,
+  buildScenarioMatchupReport,
+  findBestScenarioMatchupSwap,
+  type MatchupScoreLookup,
+  type TeamMatchupChosenPair,
+  type ScenarioMatchupReport,
+  type ScenarioMatchupSwapSuggestion,
+  type TeamMatchupDirectionalEdge
+} from "@/lib/team-matchup-balance";
+import {
+  abbreviateVisualizerName,
+  interpolateUnifiedMatchupColor,
+  normalizeUnifiedColorScore,
+  type MatchupVisualizerBundleResponse
+} from "@/lib/matchup-visualizer";
 import {
   assignPlayerToSlot,
   clearSlot,
@@ -91,12 +107,12 @@ type ScenarioReorderState = {
 
 type ScenarioActionState = {
   scenarioId: string;
-  mode: "randomize" | "balanceOverall" | "balanceCategories";
+  mode: "randomize" | "balanceOverall" | "balanceCategories" | "balanceMatchup";
 };
 
 type ScenarioActionSummary = {
   generatedCount: number;
-  mode: "randomize" | "balanceOverall" | "balanceCategories";
+  mode: "randomize" | "balanceOverall" | "balanceCategories" | "balanceMatchup";
   candidates: Assignments[];
   currentIndex: number;
 };
@@ -109,6 +125,17 @@ type TeamBalanceTotals = {
 
 type BalanceSelectionMode = "overall" | "categories";
 type ScenarioActionMode = ScenarioActionState["mode"];
+type ScenarioAnalyticsMode = "stats" | "matchup";
+type HeadToHeadSelection = {
+  perspective: "offense" | "defense";
+  sourceTeamId: string;
+  targetTeamId: string;
+};
+
+type MatchupBundleRequestState =
+  | { status: "loading"; error: null; data: null }
+  | { status: "error"; error: string; data: null }
+  | { status: "ready"; error: null; data: MatchupVisualizerBundleResponse };
 
 type ScenarioHistoryEntry = {
   assignments: Assignments;
@@ -130,6 +157,13 @@ type GeneratedScenarioCandidate = {
   overallScore: number;
 };
 
+type GeneratedMatchupScenarioCandidate = {
+  assignments: Assignments;
+  signature: string;
+  filledCount: number;
+  matchupReport: ScenarioMatchupReport;
+};
+
 type StartDragFn = (playerId: number, chipNode: HTMLDivElement) => void;
 const SCENARIO_SYNC_DEBOUNCE_MS = 2000;
 const TEAM_COLOR_SCENARIO_COMMIT_DELAY_MS = 120;
@@ -140,6 +174,12 @@ const BALANCED_ASSIGNMENT_MAX_ATTEMPTS =
   REMAINING_ASSIGNMENT_ATTEMPTS * BALANCED_ASSIGNMENT_MIN_FULL_ROSTERS;
 const MAX_SCENARIO_UNDO_STEPS = 15;
 const OVERALL_BALANCE_RANGE_FINALIST_COUNT = 10;
+const MATCHUP_CHORD_SIZE = 320;
+const MATCHUP_CHORD_HEIGHT = 260;
+const MATCHUP_NODE_RADIUS = 22;
+const MATCHUP_LINK_STROKE_WIDTH = 6;
+const MATCHUP_NODE_BUFFER_RADIUS = 5;
+const MATCHUP_ARROW_TIP_LENGTH = 12;
 
 type TeamDraft = {
   name: string;
@@ -692,7 +732,7 @@ function dedupeGeneratedCandidates(candidates: GeneratedScenarioCandidate[]) {
 
 function buildScenarioGenerationResult(
   generatedCount: number,
-  candidates: GeneratedScenarioCandidate[],
+  candidates: Array<{ assignments: Assignments }>,
   fallbackAssignments: Assignments
 ): ScenarioGenerationResult {
   const orderedCandidates =
@@ -771,6 +811,110 @@ function chooseBestBalancedAssignments(
     sortBalancedCandidates(dedupeGeneratedCandidates(partialCandidates), mode),
     assignments
   );
+}
+
+function buildGeneratedMatchupScenarioCandidate(
+  assignments: Assignments,
+  teams: Team[],
+  matchupLookup: MatchupScoreLookup
+): GeneratedMatchupScenarioCandidate {
+  return {
+    assignments: cloneAssignments(assignments),
+    signature: getScenarioAssignmentsSignature(assignments),
+    filledCount: countFilledAssignments(assignments),
+    matchupReport: buildScenarioMatchupReport(assignments, teams, matchupLookup)
+  };
+}
+
+function sortMatchupCandidates(candidates: GeneratedMatchupScenarioCandidate[]) {
+  return candidates.slice().sort((left, right) => {
+    if (left.filledCount !== right.filledCount) {
+      return right.filledCount - left.filledCount;
+    }
+
+    if (left.matchupReport.totalFairPairCount !== right.matchupReport.totalFairPairCount) {
+      return right.matchupReport.totalFairPairCount - left.matchupReport.totalFairPairCount;
+    }
+
+    if (
+      left.matchupReport.totalUnfairnessMagnitude !==
+      right.matchupReport.totalUnfairnessMagnitude
+    ) {
+      return (
+        left.matchupReport.totalUnfairnessMagnitude -
+        right.matchupReport.totalUnfairnessMagnitude
+      );
+    }
+
+    if (left.matchupReport.overallNetSpread !== right.matchupReport.overallNetSpread) {
+      return left.matchupReport.overallNetSpread - right.matchupReport.overallNetSpread;
+    }
+
+    return left.signature.localeCompare(right.signature);
+  });
+}
+
+function dedupeGeneratedMatchupCandidates(candidates: GeneratedMatchupScenarioCandidate[]) {
+  return [...new Map(candidates.map((candidate) => [candidate.signature, candidate] as const)).values()];
+}
+
+function chooseBestMatchupBalancedAssignments(
+  assignments: Assignments,
+  teams: Team[],
+  availablePlayers: Player[],
+  batchAttempts: number,
+  matchupLookup: MatchupScoreLookup
+): ScenarioGenerationResult {
+  if (availablePlayers.length === 0) {
+    return {
+      assignments,
+      generatedCount: 0,
+      candidates: []
+    };
+  }
+
+  const totalSlotCount = teams.length * POSITIONS.length;
+  let totalAttempts = 0;
+  let fullRosterCount = 0;
+  const fullCandidates: GeneratedMatchupScenarioCandidate[] = [];
+  const partialCandidates: GeneratedMatchupScenarioCandidate[] = [];
+
+  while (
+    totalAttempts < BALANCED_ASSIGNMENT_MAX_ATTEMPTS &&
+    fullRosterCount < BALANCED_ASSIGNMENT_MIN_FULL_ROSTERS
+  ) {
+    const attemptsThisBatch = Math.min(
+      batchAttempts,
+      BALANCED_ASSIGNMENT_MAX_ATTEMPTS - totalAttempts
+    );
+
+    for (let attempt = 0; attempt < attemptsThisBatch; attempt += 1) {
+      const nextAssignments = randomizeRemainingAssignments(assignments, teams, availablePlayers);
+      const nextCandidate = buildGeneratedMatchupScenarioCandidate(
+        nextAssignments,
+        teams,
+        matchupLookup
+      );
+
+      if (nextCandidate.filledCount === totalSlotCount) {
+        fullRosterCount += 1;
+        fullCandidates.push(nextCandidate);
+        continue;
+      }
+
+      partialCandidates.push(nextCandidate);
+    }
+
+    totalAttempts += attemptsThisBatch;
+  }
+
+  const orderedCandidates = sortMatchupCandidates(
+    dedupeGeneratedMatchupCandidates(
+      fullCandidates.length > 0 ? fullCandidates : partialCandidates
+    )
+  );
+
+  return buildScenarioGenerationResult(totalAttempts, orderedCandidates, assignments);
 }
 
 function getNextTeamDefaultName(teams: Team[]) {
@@ -1175,6 +1319,14 @@ function TeamsContent() {
   const [poolDropScenarioId, setPoolDropScenarioId] = useState<string | null>(null);
   const [scenarioReorder, setScenarioReorder] = useState<ScenarioReorderState | null>(null);
   const [scenarioPendingDeleteId, setScenarioPendingDeleteId] = useState<string | null>(null);
+  const [matchupBundleState, setMatchupBundleState] = useState<MatchupBundleRequestState>({
+    status: "loading",
+    error: null,
+    data: null
+  });
+  const [analyticsModeByScenario, setAnalyticsModeByScenario] = useState<
+    Record<string, ScenarioAnalyticsMode>
+  >({});
 
   const playerById = useMemo(
     () => new Map(players.map((player) => [player.id, player])),
@@ -1202,6 +1354,43 @@ function TeamsContent() {
   const hasCommittedTeamValidationError = useMemo(
     () => getTeamNameErrors(teams).some((error) => error !== null),
     [teams]
+  );
+  const matchupLookup = useMemo(
+    () => buildMatchupScoreLookup(matchupBundleState.status === "ready" ? matchupBundleState.data : null),
+    [matchupBundleState]
+  );
+  const scenarioMatchupReports = useMemo(
+    () =>
+      Object.fromEntries(
+        scenarios.map((scenario) => [
+          scenario.id,
+          buildScenarioMatchupReport(scenario.assignments, teams, matchupLookup)
+        ])
+      ) as Record<string, ScenarioMatchupReport>,
+    [matchupLookup, scenarios, teams]
+  );
+  const scenarioMatchupSwapSuggestions = useMemo(
+    () =>
+      Object.fromEntries(
+        scenarios.map((scenario) => {
+          const isComplete =
+            countFilledAssignments(scenario.assignments) === teams.length * POSITIONS.length;
+
+          return [
+            scenario.id,
+            isComplete
+              ? findBestScenarioMatchupSwap(
+                  scenario.assignments,
+                  teams,
+                  playerById,
+                  matchupLookup,
+                  scenarioMatchupReports[scenario.id]
+                )
+              : null
+          ] as const;
+        })
+      ) as Record<string, ScenarioMatchupSwapSuggestion | null>,
+    [matchupLookup, playerById, scenarioMatchupReports, scenarios, teams]
   );
 
   useEffect(() => {
@@ -1246,7 +1435,70 @@ function TeamsContent() {
         ? current
         : Object.fromEntries(nextEntries);
     });
+
+    setAnalyticsModeByScenario((current) => {
+      const nextEntries = Object.entries(current).filter(([scenarioId]) =>
+        validScenarioIds.has(scenarioId)
+      );
+
+      return nextEntries.length === Object.keys(current).length
+        ? current
+        : Object.fromEntries(nextEntries);
+    });
   }, [scenarios]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    setMatchupBundleState({
+      status: "loading",
+      error: null,
+      data: null
+    });
+
+    async function loadMatchupBundle() {
+      try {
+        const response = await fetch(buildRunApiPath(run.slug, "matchup-visualizer/chord"), {
+          cache: "no-store"
+        });
+        const payload = (await response.json()) as
+          | MatchupVisualizerBundleResponse
+          | { error?: string };
+        const payloadError = "error" in payload ? payload.error : undefined;
+
+        if (!response.ok || !("datasets" in payload)) {
+          throw new Error(payloadError ?? "Unable to load matchup comparison data.");
+        }
+
+        if (cancelled) {
+          return;
+        }
+
+        setMatchupBundleState({
+          status: "ready",
+          error: null,
+          data: payload
+        });
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
+        setMatchupBundleState({
+          status: "error",
+          error:
+            error instanceof Error ? error.message : "Unable to load matchup comparison data.",
+          data: null
+        });
+      }
+    }
+
+    void loadMatchupBundle();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [run.slug]);
 
   const syncTeamRefFromSnapshot = useCallback((snapshot: Team[]) => {
     lastSyncedTeamSignatureRef.current = JSON.stringify(teamsToRows(snapshot, run.id));
@@ -2697,7 +2949,39 @@ function TeamsContent() {
           playerById,
           REMAINING_ASSIGNMENT_ATTEMPTS,
           mode
-        )
+      )
+    );
+  };
+
+  const runMatchupBalancedScenarioRemainingPlayers = (scenarioId: string) => {
+    if (scenarioActionState || matchupBundleState.status !== "ready") {
+      return;
+    }
+
+    const scenario = scenarioById.get(scenarioId);
+    const availablePlayers = (availablePlayersByScenario.get(scenarioId) ?? []).filter(
+      canPlayerBeAssignedFromPool
+    );
+    if (!scenario || availablePlayers.length === 0) {
+      return;
+    }
+
+    const hasEmptySlot = teams.some((team) =>
+      POSITIONS.some((position) => (scenario.assignments[team.id]?.[position] ?? null) === null)
+    );
+
+    if (!hasEmptySlot) {
+      return;
+    }
+
+    beginScenarioAction(scenarioId, "balanceMatchup", () =>
+      chooseBestMatchupBalancedAssignments(
+        scenario.assignments,
+        teams,
+        availablePlayers,
+        REMAINING_ASSIGNMENT_ATTEMPTS,
+        matchupLookup
+      )
     );
   };
 
@@ -3126,6 +3410,11 @@ function TeamsContent() {
             {scenarioSyncError} Retry scenario sync
           </button>
         ) : null}
+        {matchupBundleState.status === "error" ? (
+          <div className="status-chip error" role="status">
+            {matchupBundleState.error}
+          </div>
+        ) : null}
       </div>
       <div className="scenario-stack">
         <section className="panel team-config-shell">
@@ -3199,6 +3488,7 @@ function TeamsContent() {
           const displayedAssignments =
             displayedAssignmentsByScenario.get(scenario.id) ?? scenario.assignments;
           const scenarioCharts = buildScenarioAttributeCharts(scenario.assignments, playerById, teams);
+          const scenarioMatchupReport = scenarioMatchupReports[scenario.id];
           const availablePlayers = availablePlayersByScenario.get(scenario.id) ?? [];
           const hasAssignablePoolPlayers = availablePlayers.some(canPlayerBeAssignedFromPool);
           const currentNearestSlot = nearestSlot?.scenarioId === scenario.id ? nearestSlot : null;
@@ -3222,6 +3512,19 @@ function TeamsContent() {
           const hasAssignedPlayers = teams.some((team) =>
             POSITIONS.some((position) => (scenario.assignments[team.id]?.[position] ?? null) !== null)
           );
+          const analyticsMode = analyticsModeByScenario[scenario.id] ?? "stats";
+          const isScenarioComplete =
+            countFilledAssignments(scenario.assignments) === teams.length * POSITIONS.length;
+          const swapSuggestion = scenarioMatchupSwapSuggestions[scenario.id] ?? null;
+          const swapSuggestionText = !isScenarioComplete
+            ? "Complete the roster to get swap suggestions"
+            : swapSuggestion
+              ? `To better balance the teams, consider swapping ${
+                  playerById.get(swapSuggestion.sourcePlayerId)?.name.trim() || `Player ${swapSuggestion.sourcePlayerId}`
+                } and ${
+                  playerById.get(swapSuggestion.targetPlayerId)?.name.trim() || `Player ${swapSuggestion.targetPlayerId}`
+                }.`
+              : "These teams are already close to the best matchup balance.";
           const scenarioCollapsed = Boolean(scenarioReorder) || scenario.collapsed;
           const scenarioIsDragging = scenarioReorder?.scenarioId === scenario.id;
           const deleteModalOpen = scenarioPendingDeleteId === scenario.id;
@@ -3366,7 +3669,7 @@ function TeamsContent() {
                     className={`available-shell${poolDropScenarioId === scenario.id ? " pool-drop-active" : ""}`}
                   >
                     <div className="available-toolbar">
-                      <div className="available-actions">
+                      <div className="available-actions available-actions-primary">
                         <button
                           type="button"
                           className="available-reset-button"
@@ -3384,6 +3687,9 @@ function TeamsContent() {
                         >
                           <span className="available-action-button-label">Undo</span>
                         </button>
+                      </div>
+                      <div className="available-actions available-actions-generator-row">
+                        <span className="available-actions-label">Autofill Remaining Spots:</span>
                         <button
                           type="button"
                           className={`available-randomize-button${currentScenarioAction === "randomize" ? " loading" : ""}`}
@@ -3399,6 +3705,27 @@ function TeamsContent() {
                         </button>
                         <button
                           type="button"
+                          className={`available-randomize-button${currentScenarioAction === "balanceMatchup" ? " loading" : ""}`}
+                          aria-busy={currentScenarioAction === "balanceMatchup"}
+                          onClick={() => runMatchupBalancedScenarioRemainingPlayers(scenario.id)}
+                          disabled={
+                            Boolean(scenarioActionState) ||
+                            matchupBundleState.status !== "ready" ||
+                            !hasAssignablePoolPlayers ||
+                            !hasOpenSlots
+                          }
+                          title={
+                            matchupBundleState.status === "error"
+                              ? matchupBundleState.error
+                              : matchupBundleState.status === "loading"
+                                ? "Loading matchup data..."
+                                : undefined
+                          }
+                        >
+                          <span className="available-action-button-label">Matchups</span>
+                        </button>
+                        <button
+                          type="button"
                           className={`available-randomize-button${currentScenarioAction === "balanceOverall" ? " loading" : ""}`}
                           aria-busy={currentScenarioAction === "balanceOverall"}
                           onClick={() => runBalancedScenarioRemainingPlayers(scenario.id, "overall")}
@@ -3408,7 +3735,7 @@ function TeamsContent() {
                             !hasOpenSlots
                           }
                         >
-                          <span className="available-action-button-label">Balance Overall</span>
+                          <span className="available-action-button-label">Overall Stats</span>
                         </button>
                         <button
                           type="button"
@@ -3421,7 +3748,7 @@ function TeamsContent() {
                             !hasOpenSlots
                           }
                         >
-                          <span className="available-action-button-label">Balance Categories</span>
+                          <span className="available-action-button-label">Category Stats</span>
                         </button>
                       </div>
                     </div>
@@ -3430,11 +3757,13 @@ function TeamsContent() {
                         <span>
                           {currentScenarioSummary.mode === "randomize"
                             ? `Generated ${currentScenarioSummary.generatedCount} teams and selected one at random.`
-                            : `Generated ${currentScenarioSummary.generatedCount} random teams, selected the scenario with the most balanced scores ${
-                                currentScenarioSummary.mode === "balanceOverall"
-                                  ? "overall"
-                                  : "across each category"
-                              }.`}
+                            : currentScenarioSummary.mode === "balanceMatchup"
+                              ? `Generated ${currentScenarioSummary.generatedCount} random teams and selected the scenario with the fairest matchup profile.`
+                              : `Generated ${currentScenarioSummary.generatedCount} random teams, selected the scenario with the most balanced scores ${
+                                  currentScenarioSummary.mode === "balanceOverall"
+                                    ? "overall"
+                                    : "across each category"
+                                }.`}
                         </span>
                         {canViewNextGeneratedScenario ? (
                           <button
@@ -3589,8 +3918,19 @@ function TeamsContent() {
                       />
                     ))}
                   </div>
-                  <ScenarioAttributeCharts
+                  <ScenarioAnalyticsSection
+                    analyticsMode={analyticsMode}
                     charts={scenarioCharts}
+                    matchupReport={scenarioMatchupReport}
+                    matchupHelperText={swapSuggestionText}
+                    playersById={playerById}
+                    teams={teams}
+                    onAnalyticsModeChange={(mode) =>
+                      setAnalyticsModeByScenario((current) => ({
+                        ...current,
+                        [scenario.id]: mode
+                      }))
+                    }
                   />
                 </div>
               </div>
@@ -3908,6 +4248,1069 @@ function ScenarioAttributeCharts({ charts }: { charts: ScenarioAttributeChart[] 
         </div>
       ))}
     </section>
+  );
+}
+
+function getTeamMatchupNodeLayout(count: number) {
+  if (count <= 1) {
+    return [{ x: MATCHUP_CHORD_SIZE / 2, y: MATCHUP_CHORD_HEIGHT / 2 - 6 }];
+  }
+
+  if (count === 2) {
+    return [
+      { x: 88, y: 126 },
+      { x: 232, y: 126 }
+    ];
+  }
+
+  if (count === 3) {
+    return [
+      { x: MATCHUP_CHORD_SIZE / 2, y: 58 },
+      { x: 92, y: 190 },
+      { x: 228, y: 190 }
+    ];
+  }
+
+  return [
+    { x: 86, y: 68 },
+    { x: 234, y: 68 },
+    { x: 86, y: 186 },
+    { x: 234, y: 186 }
+  ];
+}
+
+function getTeamMatchupTextOffset(index: number, count: number) {
+  if (count === 2) {
+    return index === 0
+      ? { x: 0, y: -34 }
+      : { x: 0, y: -34 };
+  }
+
+  if (count === 3) {
+    return index === 0 ? { x: 0, y: -34 } : { x: 0, y: 40 };
+  }
+
+  if (count >= 4) {
+    return index < 2 ? { x: 0, y: -34 } : { x: 0, y: 40 };
+  }
+
+  return { x: 0, y: 40 };
+}
+
+function createTeamMatchupLinePath(
+  source: { x: number; y: number },
+  target: { x: number; y: number },
+  sourceIndex: number,
+  targetIndex: number
+) {
+  const pairStart = sourceIndex < targetIndex ? source : target;
+  const pairEnd = sourceIndex < targetIndex ? target : source;
+  const pairDirectionX = pairEnd.x - pairStart.x;
+  const pairDirectionY = pairEnd.y - pairStart.y;
+  const pairDistance = Math.hypot(pairDirectionX, pairDirectionY) || 1;
+  const pairUnitX = pairDirectionX / pairDistance;
+  const pairUnitY = pairDirectionY / pairDistance;
+  const pairPerpendicularX = -pairUnitY;
+  const pairPerpendicularY = pairUnitX;
+  const centerX = MATCHUP_CHORD_SIZE / 2;
+  const centerY = MATCHUP_CHORD_HEIGHT / 2;
+  const baseMidX = (pairStart.x + pairEnd.x) / 2;
+  const baseMidY = (pairStart.y + pairEnd.y) / 2;
+  const inwardX = centerX - baseMidX;
+  const inwardY = centerY - baseMidY;
+  const inwardDistance = Math.hypot(inwardX, inwardY) || 1;
+  const inwardUnitX = inwardX / inwardDistance;
+  const inwardUnitY = inwardY / inwardDistance;
+  const curveDepth = Math.min(32, Math.max(18, pairDistance * 0.16));
+  const laneOffset = 10.5;
+  const laneSign = sourceIndex < targetIndex ? 1 : -1;
+  const sourceInset = MATCHUP_NODE_RADIUS + MATCHUP_NODE_BUFFER_RADIUS;
+  const targetPathInset =
+    MATCHUP_NODE_RADIUS + MATCHUP_NODE_BUFFER_RADIUS + MATCHUP_ARROW_TIP_LENGTH;
+
+  const controlX =
+    baseMidX + inwardUnitX * curveDepth + pairPerpendicularX * laneOffset * laneSign;
+  const controlY =
+    baseMidY + inwardUnitY * curveDepth + pairPerpendicularY * laneOffset * laneSign;
+  const startDirectionX = controlX - source.x;
+  const startDirectionY = controlY - source.y;
+  const startDirectionDistance = Math.hypot(startDirectionX, startDirectionY) || 1;
+  const startAnchorX = source.x + (startDirectionX / startDirectionDistance) * sourceInset;
+  const startAnchorY = source.y + (startDirectionY / startDirectionDistance) * sourceInset;
+  const endDirectionX = target.x - controlX;
+  const endDirectionY = target.y - controlY;
+  const endDirectionDistance = Math.hypot(endDirectionX, endDirectionY) || 1;
+  const endAnchorX =
+    target.x - (endDirectionX / endDirectionDistance) * targetPathInset;
+  const endAnchorY =
+    target.y - (endDirectionY / endDirectionDistance) * targetPathInset;
+
+  return `M ${startAnchorX} ${startAnchorY} Q ${controlX} ${controlY} ${endAnchorX} ${endAnchorY}`;
+}
+
+function getQuadraticPoint(
+  start: { x: number; y: number },
+  control: { x: number; y: number },
+  end: { x: number; y: number },
+  t: number
+) {
+  const oneMinusT = 1 - t;
+  return {
+    x: oneMinusT * oneMinusT * start.x + 2 * oneMinusT * t * control.x + t * t * end.x,
+    y: oneMinusT * oneMinusT * start.y + 2 * oneMinusT * t * control.y + t * t * end.y
+  };
+}
+
+function getQuadraticTangent(
+  start: { x: number; y: number },
+  control: { x: number; y: number },
+  end: { x: number; y: number },
+  t: number
+) {
+  return {
+    x: 2 * (1 - t) * (control.x - start.x) + 2 * t * (end.x - control.x),
+    y: 2 * (1 - t) * (control.y - start.y) + 2 * t * (end.y - control.y)
+  };
+}
+
+function createTeamMatchupTaperedBodyPath(
+  source: { x: number; y: number },
+  target: { x: number; y: number },
+  sourceIndex: number,
+  targetIndex: number
+) {
+  const centerline = createTeamMatchupLinePath(source, target, sourceIndex, targetIndex);
+  const match = centerline.match(
+    /^M\s+([-\d.]+)\s+([-\d.]+)\s+Q\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)$/
+  );
+
+  if (!match) {
+    return centerline;
+  }
+
+  const [, startX, startY, controlX, controlY, endX, endY] = match;
+  const start = { x: Number(startX), y: Number(startY) };
+  const control = { x: Number(controlX), y: Number(controlY) };
+  const end = { x: Number(endX), y: Number(endY) };
+  const sampleCount = 12;
+  const leftPoints: Array<{ x: number; y: number }> = [start];
+  const rightPoints: Array<{ x: number; y: number }> = [start];
+
+  for (let step = 1; step <= sampleCount; step += 1) {
+    const t = step / sampleCount;
+    const point = getQuadraticPoint(start, control, end, t);
+    const tangent = getQuadraticTangent(start, control, end, t);
+    const tangentLength = Math.hypot(tangent.x, tangent.y) || 1;
+    const normalX = -tangent.y / tangentLength;
+    const normalY = tangent.x / tangentLength;
+    const halfWidth = (MATCHUP_LINK_STROKE_WIDTH / 2) * t;
+
+    leftPoints.push({
+      x: point.x + normalX * halfWidth,
+      y: point.y + normalY * halfWidth
+    });
+    rightPoints.push({
+      x: point.x - normalX * halfWidth,
+      y: point.y - normalY * halfWidth
+    });
+  }
+
+  const leftPath = leftPoints.map((point) => `L ${point.x} ${point.y}`).join(" ");
+  const rightPath = rightPoints
+    .slice()
+    .reverse()
+    .map((point) => `L ${point.x} ${point.y}`)
+    .join(" ");
+
+  return `M ${start.x} ${start.y} ${leftPath} ${rightPath} Z`;
+}
+
+function getDirectionalTeamMatchupColor(score: number) {
+  const magnitude = Math.abs(score);
+  const strongThreshold = 1.5;
+
+  if (magnitude < 0.3) {
+    return "#facc15";
+  }
+
+  if (score > 0) {
+    return magnitude < strongThreshold ? "#84cc16" : "#16a34a";
+  }
+
+  return magnitude < strongThreshold ? "#fb923c" : "#dc2626";
+}
+
+function ScenarioAnalyticsSection({
+  analyticsMode,
+  charts,
+  matchupReport,
+  matchupHelperText,
+  playersById,
+  teams,
+  onAnalyticsModeChange
+}: {
+  analyticsMode: ScenarioAnalyticsMode;
+  charts: ScenarioAttributeChart[];
+  matchupReport: ScenarioMatchupReport;
+  matchupHelperText: string;
+  playersById: ReadonlyMap<number, Player>;
+  teams: Team[];
+  onAnalyticsModeChange: (mode: ScenarioAnalyticsMode) => void;
+}) {
+  return (
+    <div className="scenario-analytics-shell">
+      <div className="scenario-analytics-tabs" role="tablist" aria-label="Scenario analytics mode">
+        {([
+          { value: "matchup", label: "Matchup Comparison" },
+          { value: "stats", label: "Stats Comparison" }
+        ] as const).map((option) => (
+          <button
+            key={option.value}
+            type="button"
+            role="tab"
+            aria-selected={analyticsMode === option.value}
+            className={`scenario-analytics-tab${analyticsMode === option.value ? " active" : ""}`}
+            onClick={() => onAnalyticsModeChange(option.value)}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+      {analyticsMode === "stats" ? (
+        <ScenarioAttributeCharts charts={charts} />
+      ) : (
+        <ScenarioMatchupCharts
+          report={matchupReport}
+          helperText={matchupHelperText}
+          playersById={playersById}
+          teams={teams}
+        />
+      )}
+    </div>
+  );
+}
+
+function ScenarioMatchupCharts({
+  report,
+  helperText,
+  playersById,
+  teams
+}: {
+  report: ScenarioMatchupReport;
+  helperText: string;
+  playersById: ReadonlyMap<number, Player>;
+  teams: Team[];
+}) {
+  const [headToHeadSelection, setHeadToHeadSelection] = useState<HeadToHeadSelection | null>(null);
+  const isHeadToHeadMode = headToHeadSelection !== null;
+  const showOffenseHeadToHead = headToHeadSelection?.perspective === "defense";
+  const showDefenseHeadToHead = headToHeadSelection?.perspective === "offense";
+  const offenseSourceSelected = headToHeadSelection?.perspective === "offense";
+  const defenseSourceSelected = headToHeadSelection?.perspective === "defense";
+
+  useEffect(() => {
+    if (!headToHeadSelection) {
+      return undefined;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Element)) {
+        return;
+      }
+
+      if (target.closest(".scenario-head-to-head")) {
+        return;
+      }
+
+      if (target.closest(".scenario-matchup-chord-link")) {
+        return;
+      }
+
+      setHeadToHeadSelection(null);
+    };
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+    };
+  }, [headToHeadSelection]);
+
+  return (
+    <section className="scenario-matchup-analytics" aria-label="Team matchup comparison">
+      <div
+        className={`scenario-chart-card scenario-matchup-card scenario-matchup-optimization-card${isHeadToHeadMode ? " scenario-matchup-card-dimmed" : ""}`}
+      >
+        <div className="scenario-chart-header">
+          <h2 className="scenario-chart-title">Optimization Results</h2>
+        </div>
+        <OptimizationResultsCard report={report} helperText={helperText} teams={teams} />
+      </div>
+      <div
+        className={`scenario-chart-card scenario-matchup-card${isHeadToHeadMode ? " scenario-matchup-card-dimmed" : ""}`}
+      >
+        <div className="scenario-chart-header scenario-chart-header-stacked">
+          <h2 className="scenario-chart-title">Team Advantages</h2>
+          <p className="scenario-chart-helper">Summarized results for player-pair matchups</p>
+        </div>
+        <OverallMatchupBarChart report={report} teams={teams} />
+      </div>
+      <div
+        className={`scenario-chart-card scenario-matchup-card${showOffenseHeadToHead ? " scenario-matchup-card-head-to-head" : ""}${offenseSourceSelected ? " scenario-matchup-card-source-selected" : ""}`}
+      >
+        {showOffenseHeadToHead ? (
+          <HeadToHeadMatchupCard
+            report={report}
+            selection={headToHeadSelection}
+            playersById={playersById}
+            teams={teams}
+          />
+        ) : (
+          <>
+            <div className="scenario-chart-header scenario-chart-header-stacked">
+              <h2 className="scenario-chart-title">Offense</h2>
+              <p className="scenario-chart-helper">Select arrows to see Head to Head matchup</p>
+            </div>
+            <TeamMatchupChordDiagram
+              edges={report.offenseEdges}
+              teams={teams}
+              perspectiveLabel="offense"
+              selectedHeadToHead={headToHeadSelection}
+              onEdgeSelect={setHeadToHeadSelection}
+            />
+          </>
+        )}
+      </div>
+      <div
+        className={`scenario-chart-card scenario-matchup-card${showDefenseHeadToHead ? " scenario-matchup-card-head-to-head" : ""}${defenseSourceSelected ? " scenario-matchup-card-source-selected" : ""}`}
+      >
+        {showDefenseHeadToHead ? (
+          <HeadToHeadMatchupCard
+            report={report}
+            selection={headToHeadSelection}
+            playersById={playersById}
+            teams={teams}
+          />
+        ) : (
+          <>
+            <div className="scenario-chart-header scenario-chart-header-stacked">
+              <h2 className="scenario-chart-title">Defense</h2>
+              <p className="scenario-chart-helper">Select arrows to see Head to Head matchup</p>
+            </div>
+            <TeamMatchupChordDiagram
+              edges={report.defenseEdges}
+              teams={teams}
+              perspectiveLabel="defense"
+              selectedHeadToHead={headToHeadSelection}
+              onEdgeSelect={setHeadToHeadSelection}
+            />
+          </>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function OptimizationResultsCard({
+  report,
+  helperText,
+  teams
+}: {
+  report: ScenarioMatchupReport;
+  helperText: string;
+  teams: Team[];
+}) {
+  const teamPairCount = (teams.length * (teams.length - 1)) / 2;
+  const totalChosenMatchups = teamPairCount * 10;
+  const fairMatchups = Math.min(report.totalFairPairCount, totalChosenMatchups);
+  const fairWidth = totalChosenMatchups > 0 ? (fairMatchups / totalChosenMatchups) * 100 : 0;
+  const GOAL_SCORE_LIMIT = 10;
+  const mismatchScoreCompletion = Math.max(
+    0,
+    Math.min(GOAL_SCORE_LIMIT, GOAL_SCORE_LIMIT - report.totalUnfairnessMagnitude)
+  );
+  const mismatchScoreWidth = (mismatchScoreCompletion / GOAL_SCORE_LIMIT) * 100;
+  const spreadScoreCompletion = Math.max(
+    0,
+    Math.min(GOAL_SCORE_LIMIT, GOAL_SCORE_LIMIT - report.overallNetSpread)
+  );
+  const spreadScoreWidth = (spreadScoreCompletion / GOAL_SCORE_LIMIT) * 100;
+
+  return (
+    <div className="scenario-matchup-optimization">
+      <div className="scenario-matchup-optimization-section">
+        <h3 className="scenario-matchup-optimization-heading">Goal 1: Maximize Fair Matchups</h3>
+        <div
+          className="scenario-matchup-optimization-bar"
+          role="img"
+          aria-label={`${fairMatchups} fair chosen matchups out of ${totalChosenMatchups} total chosen matchups`}
+        >
+          <div
+            className="scenario-matchup-optimization-bar-segment fair"
+            style={{ width: `${fairWidth}%` }}
+          />
+          <div
+            className="scenario-matchup-optimization-bar-segment remainder"
+            style={{ width: `${100 - fairWidth}%` }}
+          />
+          <div className="scenario-matchup-optimization-bar-value">
+            {fairMatchups} / {totalChosenMatchups}
+          </div>
+        </div>
+        <p className="scenario-matchup-optimization-subtext">
+          A pair is fair when its matchup score is within +/-0.3
+        </p>
+      </div>
+
+      <div className="scenario-matchup-optimization-section">
+        <h3 className="scenario-matchup-optimization-heading">Goal 2: Minimize Total Mismatch Score</h3>
+        <div
+          className="scenario-matchup-optimization-bar"
+          role="img"
+          aria-label={`Total mismatch score ${report.totalUnfairnessMagnitude.toFixed(2)} on a 0 to 10 scale`}
+        >
+          <div
+            className="scenario-matchup-optimization-bar-segment fair"
+            style={{ width: `${mismatchScoreWidth}%` }}
+          />
+          <div
+            className="scenario-matchup-optimization-bar-segment remainder"
+            style={{ width: `${100 - mismatchScoreWidth}%` }}
+          />
+          <div className="scenario-matchup-optimization-bar-value">
+            Score: {report.totalUnfairnessMagnitude.toFixed(2)}
+          </div>
+        </div>
+        <p className="scenario-matchup-optimization-subtext">
+          This is total mismatch score across player pairs.
+        </p>
+      </div>
+
+      <div className="scenario-matchup-optimization-section">
+        <h3 className="scenario-matchup-optimization-heading">Goal 3: Minimize Team Advantages</h3>
+        <div
+          className="scenario-matchup-optimization-bar"
+          role="img"
+          aria-label={`Team-level mismatch spread ${report.overallNetSpread.toFixed(2)} on a 0 to 10 scale`}
+        >
+          <div
+            className="scenario-matchup-optimization-bar-segment fair"
+            style={{ width: `${spreadScoreWidth}%` }}
+          />
+          <div
+            className="scenario-matchup-optimization-bar-segment remainder"
+            style={{ width: `${100 - spreadScoreWidth}%` }}
+          />
+          <div className="scenario-matchup-optimization-bar-value">
+            Score: {report.overallNetSpread.toFixed(2)}
+          </div>
+        </div>
+        <p className="scenario-matchup-optimization-subtext">
+          This is the overall spread between teams.
+        </p>
+      </div>
+
+      <div className="scenario-matchup-optimization-section scenario-matchup-optimization-suggestion">
+        <h3 className="scenario-matchup-optimization-heading">Suggested Swap</h3>
+        <p className="scenario-matchup-overall-helper">{helperText}</p>
+      </div>
+    </div>
+  );
+}
+
+function resolveHeadToHeadMatchup(
+  report: ScenarioMatchupReport,
+  selection: HeadToHeadSelection,
+  teams: Team[]
+) {
+  const pairReport = report.teamPairs.find(
+    (pair) =>
+      (pair.leftTeamId === selection.sourceTeamId && pair.rightTeamId === selection.targetTeamId) ||
+      (pair.leftTeamId === selection.targetTeamId && pair.rightTeamId === selection.sourceTeamId)
+  );
+
+  if (!pairReport) {
+    return null;
+  }
+
+  const teamById = new Map(teams.map((team) => [team.id, team] as const));
+  const sourceTeam = teamById.get(selection.sourceTeamId);
+  const targetTeam = teamById.get(selection.targetTeamId);
+  const leftTeam = teamById.get(pairReport.leftTeamId);
+  const rightTeam = teamById.get(pairReport.rightTeamId);
+
+  if (!sourceTeam || !targetTeam || !leftTeam || !rightTeam) {
+    return null;
+  }
+
+  const isForward =
+    pairReport.leftTeamId === selection.sourceTeamId &&
+    pairReport.rightTeamId === selection.targetTeamId;
+
+  const mapPairForDisplay = (
+    pair: TeamMatchupChosenPair,
+    mode: "forward" | "reverse"
+  ) => {
+    if (mode === "forward") {
+      return {
+        offensePlayerId: pair.sourcePlayerId,
+        defensePlayerId: pair.targetPlayerId,
+        score: pair.rawScore,
+        voteTotal: pair.voteTotal,
+        colorHex: pair.colorHex
+      };
+    }
+
+    const reversedScore = -pair.rawScore;
+    return {
+      offensePlayerId: pair.targetPlayerId,
+      defensePlayerId: pair.sourcePlayerId,
+      score: reversedScore,
+      voteTotal: pair.voteTotal,
+      colorHex: interpolateUnifiedMatchupColor(normalizeUnifiedColorScore(reversedScore))
+    };
+  };
+
+  if (selection.perspective === "offense") {
+    const perspectiveReport = isForward ? pairReport.offense : pairReport.defense;
+    const rows = perspectiveReport.pairs.map((pair) =>
+      mapPairForDisplay(pair, isForward ? "forward" : "reverse")
+    );
+    const offenseTeam = isForward ? leftTeam : rightTeam;
+    const defenseTeam = isForward ? rightTeam : leftTeam;
+
+    return {
+      offenseTeamLabel: getTeamDisplayName(
+        offenseTeam,
+        teams.findIndex((team) => team.id === offenseTeam.id)
+      ),
+      defenseTeamLabel: getTeamDisplayName(
+        defenseTeam,
+        teams.findIndex((team) => team.id === defenseTeam.id)
+      ),
+      rows
+    };
+  }
+
+  const perspectiveReport = isForward ? pairReport.defense : pairReport.offense;
+  const rows = perspectiveReport.pairs.map((pair) =>
+    mapPairForDisplay(pair, isForward ? "reverse" : "forward")
+  );
+  const offenseTeam = isForward ? rightTeam : leftTeam;
+  const defenseTeam = isForward ? leftTeam : rightTeam;
+
+  return {
+    offenseTeamLabel: getTeamDisplayName(
+      offenseTeam,
+      teams.findIndex((team) => team.id === offenseTeam.id)
+    ),
+    defenseTeamLabel: getTeamDisplayName(
+      defenseTeam,
+      teams.findIndex((team) => team.id === defenseTeam.id)
+    ),
+    rows
+  };
+}
+
+function HeadToHeadMatchupCard({
+  report,
+  selection,
+  playersById,
+  teams
+}: {
+  report: ScenarioMatchupReport;
+  selection: HeadToHeadSelection;
+  playersById: ReadonlyMap<number, Player>;
+  teams: Team[];
+}) {
+  const resolvedMatchup = resolveHeadToHeadMatchup(report, selection, teams);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const [hoveredRowKey, setHoveredRowKey] = useState<string | null>(null);
+  const [hoveredRowTooltip, setHoveredRowTooltip] = useState<{
+    scoreLabel: string;
+    votesLabel: string;
+    color: string;
+    x: number;
+    y: number;
+  } | null>(null);
+
+  if (!resolvedMatchup) {
+    return <div className="scenario-matchup-empty">Unable to load the selected head-to-head matchup.</div>;
+  }
+
+  const maxVoteTotal = Math.max(...resolvedMatchup.rows.map((row) => row.voteTotal), 1);
+  const getLineWidth = (voteTotal: number) => {
+    const clampedVotes = Math.max(1, Math.min(maxVoteTotal, voteTotal || 1));
+    if (maxVoteTotal <= 1) {
+      return 2.5;
+    }
+
+    return 2.5 + ((clampedVotes - 1) / (maxVoteTotal - 1)) * (14 - 2.5);
+  };
+
+  return (
+    <div
+      ref={wrapRef}
+      className="scenario-head-to-head"
+      onMouseLeave={() => {
+        setHoveredRowKey(null);
+        setHoveredRowTooltip(null);
+      }}
+    >
+      <div className="scenario-head-to-head-title">
+        <div className="scenario-head-to-head-heading">Head to Head</div>
+      </div>
+      <div className="scenario-head-to-head-columns">
+        <div className="scenario-head-to-head-column-label">
+          {abbreviateVisualizerName(resolvedMatchup.offenseTeamLabel)} OFFENSE
+        </div>
+        <div />
+        <div className="scenario-head-to-head-column-label defense">
+          {abbreviateVisualizerName(resolvedMatchup.defenseTeamLabel)} DEFENSE
+        </div>
+      </div>
+      <div className="scenario-head-to-head-rows">
+        {resolvedMatchup.rows.map((row, index) => (
+          <div key={`${row.offensePlayerId}:${row.defensePlayerId}:${index}`} className="scenario-head-to-head-row">
+            <div className="scenario-head-to-head-player offense">
+              {playersById.get(row.offensePlayerId)?.name.trim() || `Player ${row.offensePlayerId}`}
+            </div>
+            <div className="scenario-head-to-head-connector">
+              <svg
+                viewBox="0 0 100 20"
+                preserveAspectRatio="none"
+                className={`scenario-head-to-head-line${hoveredRowKey === `${row.offensePlayerId}:${row.defensePlayerId}:${index}` ? " hovered" : ""}`}
+                onMouseEnter={(event) => {
+                  const bounds = wrapRef.current?.getBoundingClientRect();
+                  const x = bounds ? event.clientX - bounds.left : 0;
+                  const y = bounds ? event.clientY - bounds.top : 0;
+                  const rowKey = `${row.offensePlayerId}:${row.defensePlayerId}:${index}`;
+                  setHoveredRowKey(rowKey);
+                  setHoveredRowTooltip({
+                    scoreLabel: `Offense Advantage: ${row.score >= 0 ? "+" : ""}${row.score.toFixed(2)}`,
+                    votesLabel: `Votes: ${row.voteTotal}`,
+                    color: row.colorHex,
+                    x,
+                    y
+                  });
+                }}
+                onMouseMove={(event) => {
+                  const bounds = wrapRef.current?.getBoundingClientRect();
+                  const x = bounds ? event.clientX - bounds.left : 0;
+                  const y = bounds ? event.clientY - bounds.top : 0;
+                  const rowKey = `${row.offensePlayerId}:${row.defensePlayerId}:${index}`;
+                  setHoveredRowKey(rowKey);
+                  setHoveredRowTooltip({
+                    scoreLabel: `Offense Advantage: ${row.score >= 0 ? "+" : ""}${row.score.toFixed(2)}`,
+                    votesLabel: `Votes: ${row.voteTotal}`,
+                    color: row.colorHex,
+                    x,
+                    y
+                  });
+                }}
+                onMouseLeave={() => {
+                  const rowKey = `${row.offensePlayerId}:${row.defensePlayerId}:${index}`;
+                  setHoveredRowKey((current) => (current === rowKey ? null : current));
+                  setHoveredRowTooltip((current) =>
+                    current?.scoreLabel === `Offense Advantage: ${row.score >= 0 ? "+" : ""}${row.score.toFixed(2)}`
+                      ? null
+                      : current
+                  );
+                }}
+              >
+                <line
+                  x1="0"
+                  y1="10"
+                  x2="100"
+                  y2="10"
+                  stroke={row.colorHex}
+                  strokeWidth={getLineWidth(row.voteTotal)}
+                  strokeLinecap="round"
+                />
+              </svg>
+            </div>
+            <div className="scenario-head-to-head-player defense">
+              {playersById.get(row.defensePlayerId)?.name.trim() || `Player ${row.defensePlayerId}`}
+            </div>
+          </div>
+        ))}
+      </div>
+      {hoveredRowTooltip ? (
+        <div
+          className="scenario-matchup-tooltip"
+          style={{
+            left: `${hoveredRowTooltip.x}px`,
+            top: `${hoveredRowTooltip.y}px`
+          }}
+        >
+          <div
+            className="scenario-matchup-tooltip-score"
+            style={{ color: hoveredRowTooltip.color, marginTop: 0 }}
+          >
+            {hoveredRowTooltip.scoreLabel}
+          </div>
+          <div className="scenario-matchup-tooltip-title">{hoveredRowTooltip.votesLabel}</div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function OverallMatchupBarChart({
+  report,
+  teams
+  }: {
+    report: ScenarioMatchupReport;
+    teams: Team[];
+  }) {
+    const totalsByTeamId = new Map(report.teamNetAdvantages.map((team) => [team.teamId, team] as const));
+    const OVERALL_MATCHUP_SCALE_LIMIT = 5;
+    const scale = 50 / OVERALL_MATCHUP_SCALE_LIMIT;
+
+    return (
+      <div className="scenario-matchup-overall-shell">
+        <div className="scenario-matchup-overall-chart" role="img" aria-label="Overall team net matchup advantage bar chart">
+          {teams.map((team, index) => {
+            const totals = totalsByTeamId.get(team.id);
+            const metrics = [
+              { key: "overall", label: "OVR", value: totals?.overall ?? 0 },
+              { key: "offense", label: "OFF", value: totals?.offense ?? 0 },
+              { key: "defense", label: "DEF", value: totals?.defense ?? 0 }
+            ] as const;
+
+            return (
+              <div key={team.id} className="scenario-matchup-overall-row">
+                <div className="scenario-matchup-overall-label">
+                  {abbreviateVisualizerName(getTeamDisplayName(team, index))}
+                </div>
+                <div className="scenario-matchup-overall-metrics">
+                    {metrics.map((metric) => {
+                      const clampedValue = Math.max(
+                        -OVERALL_MATCHUP_SCALE_LIMIT,
+                        Math.min(OVERALL_MATCHUP_SCALE_LIMIT, metric.value)
+                      );
+                      const width = Math.abs(clampedValue) * scale;
+                      const direction = metric.value >= 0 ? "positive" : "negative";
+                      const barStyle = {
+                        width: `${width}%`,
+                        background: team.color,
+                        left: clampedValue >= 0 ? "50%" : `calc(50% - ${width}%)`
+                      };
+
+                      return (
+                        <div
+                          key={metric.key}
+                          className={`scenario-matchup-overall-metric scenario-matchup-overall-metric-${metric.key}`}
+                        >
+                          <div className="scenario-matchup-overall-track">
+                            <div className="scenario-matchup-overall-baseline" aria-hidden="true" />
+                            <div className={`scenario-matchup-overall-bar ${direction}`} style={barStyle} />
+                          </div>
+                          <div className={`scenario-matchup-overall-value ${direction}`}>
+                            {metric.value >= 0 ? "+" : ""}
+                            {metric.value.toFixed(2)}
+                          </div>
+                          <div className="scenario-matchup-overall-metric-label">{metric.label}</div>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+}
+
+function TeamMatchupChordDiagram({
+  edges,
+  teams,
+  perspectiveLabel,
+  selectedHeadToHead,
+  onEdgeSelect
+}: {
+  edges: TeamMatchupDirectionalEdge[];
+  teams: Team[];
+  perspectiveLabel: "offense" | "defense";
+  selectedHeadToHead: HeadToHeadSelection | null;
+  onEdgeSelect: (selection: HeadToHeadSelection | null) => void;
+}) {
+  const [hoveredTeamId, setHoveredTeamId] = useState<string | null>(null);
+  const [selectedTeamId, setSelectedTeamId] = useState<string | null>(null);
+  const [hoveredEdgeKey, setHoveredEdgeKey] = useState<string | null>(null);
+  const [hoveredEdgeTooltip, setHoveredEdgeTooltip] = useState<{
+    title: string;
+    scoreLabel: string;
+    color: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+  const markerNamespace = useId().replace(/:/g, "");
+  const groups = useMemo(() => {
+    const positions = getTeamMatchupNodeLayout(teams.length);
+    return teams.map((team, index) => ({
+      team,
+      index,
+      position: positions[index] ?? positions[positions.length - 1] ?? { x: MATCHUP_CHORD_SIZE / 2, y: MATCHUP_CHORD_HEIGHT / 2 },
+      labelOffset: getTeamMatchupTextOffset(index, teams.length)
+    }));
+  }, [teams]);
+  const groupByTeamId = useMemo(() => new Map(groups.map((group) => [group.team.id, group] as const)), [groups]);
+  const activeTeamId = selectedTeamId ?? hoveredTeamId;
+  const markerDefinitions = useMemo(
+    () => [
+      { id: `${markerNamespace}-${perspectiveLabel}-arrow-yellow`, color: "#facc15" },
+      { id: `${markerNamespace}-${perspectiveLabel}-arrow-orange`, color: "#fb923c" },
+      { id: `${markerNamespace}-${perspectiveLabel}-arrow-red`, color: "#dc2626" },
+      { id: `${markerNamespace}-${perspectiveLabel}-arrow-green-light`, color: "#84cc16" },
+      { id: `${markerNamespace}-${perspectiveLabel}-arrow-green`, color: "#16a34a" }
+    ],
+    [markerNamespace, perspectiveLabel]
+  );
+  const markerIdByColor = useMemo(
+    () => new Map(markerDefinitions.map((marker) => [marker.color, marker.id] as const)),
+    [markerDefinitions]
+  );
+
+  if (edges.length === 0 || teams.length < 2) {
+    return (
+      <div className="scenario-matchup-empty">
+        All {perspectiveLabel} matchups are currently neutral.
+      </div>
+    );
+  }
+
+  return (
+    <div
+      ref={wrapRef}
+      className="scenario-matchup-chord-wrap"
+      onMouseLeave={() => {
+        setHoveredEdgeKey(null);
+        setHoveredEdgeTooltip(null);
+      }}
+    >
+      <svg
+        className="scenario-matchup-chord"
+        viewBox={`0 0 ${MATCHUP_CHORD_SIZE} ${MATCHUP_CHORD_HEIGHT}`}
+        role="img"
+        aria-label={`${perspectiveLabel} team matchup chord diagram`}
+        onClick={(event) => {
+          if (event.target === event.currentTarget) {
+            setSelectedTeamId(null);
+            setHoveredTeamId(null);
+            setHoveredEdgeKey(null);
+            setHoveredEdgeTooltip(null);
+            onEdgeSelect(null);
+          }
+        }}
+      >
+        <defs>
+          {markerDefinitions.map((marker) => (
+            <marker
+              key={marker.id}
+              id={marker.id}
+              viewBox="0 0 12 12"
+              markerWidth="12"
+              markerHeight="12"
+              refX="0"
+              refY="6"
+              orient="auto"
+              markerUnits="userSpaceOnUse"
+            >
+              <path d="M 0 0 L 12 6 L 0 12 z" fill={marker.color} />
+            </marker>
+          ))}
+        </defs>
+        {edges.map((edge) => {
+          const source = groupByTeamId.get(edge.sourceTeamId);
+          const target = groupByTeamId.get(edge.targetTeamId);
+
+          if (!source || !target) {
+            return null;
+          }
+
+          const color = getDirectionalTeamMatchupColor(edge.cumulativeScore);
+          const isActiveOutgoing = activeTeamId !== null && edge.sourceTeamId === activeTeamId;
+          const isDimmed = activeTeamId !== null && !isActiveOutgoing;
+          const edgeKey = `${edge.sourceTeamId}:${edge.targetTeamId}`;
+          const isSelected =
+            selectedHeadToHead?.perspective === perspectiveLabel &&
+            selectedHeadToHead?.sourceTeamId === edge.sourceTeamId &&
+            selectedHeadToHead?.targetTeamId === edge.targetTeamId;
+          const isHovered = hoveredEdgeKey === edgeKey || isSelected;
+          const opposingLabel = perspectiveLabel === "offense" ? "defense" : "offense";
+          const tooltipTitle = `${getTeamDisplayName(source.team, source.index)} ${perspectiveLabel} vs. ${getTeamDisplayName(target.team, target.index)} ${opposingLabel}`;
+
+          const centerlinePath = createTeamMatchupLinePath(
+            source.position,
+            target.position,
+            source.index,
+            target.index
+          );
+          const taperedBodyPath = createTeamMatchupTaperedBodyPath(
+            source.position,
+            target.position,
+            source.index,
+            target.index
+          );
+
+          return (
+            <g
+              key={edgeKey}
+              opacity={isHovered ? 1 : isDimmed ? 0.2 : isActiveOutgoing ? 0.98 : 0.9}
+              className={`scenario-matchup-chord-link${isActiveOutgoing ? " active" : ""}${isDimmed ? " inactive" : ""}${isHovered ? " hovered" : ""}`}
+              onMouseEnter={(event) => {
+                const bounds = wrapRef.current?.getBoundingClientRect();
+                const x = bounds ? event.clientX - bounds.left : 0;
+                const y = bounds ? event.clientY - bounds.top : 0;
+                setHoveredEdgeKey(edgeKey);
+                setHoveredEdgeTooltip({
+                  title: tooltipTitle,
+                  scoreLabel: `${edge.cumulativeScore >= 0 ? "+" : ""}${edge.cumulativeScore.toFixed(2)}`,
+                  color,
+                  x,
+                  y
+                });
+              }}
+              onMouseMove={(event) => {
+                const bounds = wrapRef.current?.getBoundingClientRect();
+                const x = bounds ? event.clientX - bounds.left : 0;
+                const y = bounds ? event.clientY - bounds.top : 0;
+                setHoveredEdgeKey(edgeKey);
+                setHoveredEdgeTooltip((current) =>
+                  current
+                    ? {
+                        ...current,
+                        title: tooltipTitle,
+                        scoreLabel: `${edge.cumulativeScore >= 0 ? "+" : ""}${edge.cumulativeScore.toFixed(2)}`,
+                        color,
+                        x,
+                        y
+                      }
+                    : {
+                        title: tooltipTitle,
+                        scoreLabel: `${edge.cumulativeScore >= 0 ? "+" : ""}${edge.cumulativeScore.toFixed(2)}`,
+                        color,
+                        x,
+                        y
+                      }
+                );
+              }}
+              onMouseLeave={() => {
+                setHoveredEdgeKey((current) => (current === edgeKey ? null : current));
+                setHoveredEdgeTooltip((current) =>
+                  current?.title === tooltipTitle
+                    ? null
+                    : current
+                );
+              }}
+              onClick={(event) => {
+                event.stopPropagation();
+                onEdgeSelect(
+                  isSelected
+                    ? null
+                    : {
+                        perspective: perspectiveLabel,
+                        sourceTeamId: edge.sourceTeamId,
+                        targetTeamId: edge.targetTeamId
+                      }
+                );
+              }}
+            >
+              {isHovered ? (
+                <path
+                  d={taperedBodyPath}
+                  fill="none"
+                  stroke="rgba(255, 255, 255, 0.55)"
+                  strokeWidth="1.5"
+                  strokeLinejoin="round"
+                />
+              ) : null}
+              <path d={taperedBodyPath} fill={color} stroke="none" />
+              <path
+                d={centerlinePath}
+                fill="none"
+                stroke="transparent"
+                strokeWidth="1"
+                strokeLinecap="butt"
+                strokeLinejoin="round"
+                markerEnd={`url(#${markerIdByColor.get(color) ?? markerDefinitions[0]?.id})`}
+              />
+            </g>
+          );
+        })}
+        {groups.map((group, index) => {
+          const isFocused = activeTeamId === group.team.id;
+          const isDimmed = activeTeamId !== null && activeTeamId !== group.team.id;
+          const isHeadToHeadRelated =
+            selectedHeadToHead?.perspective === perspectiveLabel &&
+            (selectedHeadToHead.sourceTeamId === group.team.id ||
+              selectedHeadToHead.targetTeamId === group.team.id);
+          const labelX = group.position.x + group.labelOffset.x;
+          const labelY = group.position.y + group.labelOffset.y;
+
+          return (
+            <g
+              key={group.team.id}
+              className={`scenario-matchup-node-group${isFocused ? " active" : ""}${selectedTeamId === group.team.id ? " pinned" : ""}${isDimmed ? " inactive" : ""}${isHeadToHeadRelated ? " head-to-head-related" : ""}`}
+              onMouseEnter={() => {
+                if (selectedTeamId === null) {
+                  setHoveredTeamId(group.team.id);
+                }
+              }}
+              onMouseLeave={() => {
+                if (selectedTeamId === null) {
+                  setHoveredTeamId(null);
+                }
+              }}
+              onClick={(event) => {
+                event.stopPropagation();
+                setSelectedTeamId((current) => (current === group.team.id ? null : group.team.id));
+                setHoveredTeamId(null);
+              }}
+            >
+              <circle
+                cx={group.position.x}
+                cy={group.position.y}
+                r={MATCHUP_NODE_RADIUS}
+                fill={group.team.color}
+                stroke={isFocused ? "rgba(255,255,255,0.8)" : "rgba(255,255,255,0.22)"}
+                strokeWidth={isFocused ? "2.6" : "1.5"}
+                className={`scenario-matchup-chord-node${isFocused ? " active" : ""}${selectedTeamId === group.team.id ? " pinned" : ""}`}
+              />
+              <text
+                x={labelX}
+                y={labelY}
+                textAnchor="middle"
+                dominantBaseline="middle"
+                className={`scenario-matchup-chord-label${isFocused ? " active" : ""}${selectedTeamId === group.team.id ? " pinned" : ""}${isDimmed ? " inactive" : ""}`}
+              >
+                {abbreviateVisualizerName(getTeamDisplayName(group.team, index))}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+      {hoveredEdgeTooltip ? (
+        <div
+          className="scenario-matchup-tooltip"
+          style={{
+            left: `${hoveredEdgeTooltip.x}px`,
+            top: `${hoveredEdgeTooltip.y}px`
+          }}
+        >
+          <div className="scenario-matchup-tooltip-title">{hoveredEdgeTooltip.title}</div>
+          <div
+            className="scenario-matchup-tooltip-score"
+            style={{ color: hoveredEdgeTooltip.color }}
+          >
+            {hoveredEdgeTooltip.scoreLabel}
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 

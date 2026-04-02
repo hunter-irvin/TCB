@@ -21,6 +21,11 @@ export type MatchupTinderMatchup = {
   defensePlayer: MatchupTinderPlayer;
 };
 
+export type MatchupTinderVoteRow = {
+  offense_player_id: number;
+  defense_player_id: number;
+};
+
 type DbMatchupTinderPlayerRow = {
   id: number;
   row_number: number;
@@ -75,18 +80,67 @@ function pickRandomItem<T>(items: T[]) {
   return items[index] ?? null;
 }
 
+function buildUndirectedMatchupKey(playerIdA: number, playerIdB: number) {
+  const lowerId = Math.min(playerIdA, playerIdB);
+  const higherId = Math.max(playerIdA, playerIdB);
+  return `${lowerId}:${higherId}`;
+}
+
+function getPairVoteWeight(voteTotal: number) {
+  return 1 / (voteTotal + 1);
+}
+
+function pickWeightedItem<T>(items: T[], getWeight: (item: T) => number) {
+  if (items.length === 0) {
+    return null;
+  }
+
+  const weightedItems = items.map((item) => ({
+    item,
+    weight: Math.max(0, getWeight(item))
+  }));
+  const totalWeight = weightedItems.reduce((sum, entry) => sum + entry.weight, 0);
+
+  if (totalWeight <= 0) {
+    return pickRandomItem(items);
+  }
+
+  let remainingWeight = Math.random() * totalWeight;
+
+  for (const entry of weightedItems) {
+    remainingWeight -= entry.weight;
+    if (remainingWeight <= 0) {
+      return entry.item;
+    }
+  }
+
+  return weightedItems[weightedItems.length - 1]?.item ?? null;
+}
+
+export function buildMatchupPairVoteTotals(rows: MatchupTinderVoteRow[]) {
+  const voteTotals = new Map<string, number>();
+
+  for (const row of rows) {
+    const matchupKey = buildUndirectedMatchupKey(row.offense_player_id, row.defense_player_id);
+    voteTotals.set(matchupKey, (voteTotals.get(matchupKey) ?? 0) + 1);
+  }
+
+  return voteTotals;
+}
+
 export function buildNextMatchup(
   players: MatchupTinderPlayer[],
   excludedKeys: Iterable<string>,
-  mode: MatchupTinderMode
+  mode: MatchupTinderMode,
+  pairVoteTotals: ReadonlyMap<string, number> = new Map()
 ): MatchupTinderMatchup | null {
   if (players.length < 2) {
     return null;
   }
 
   const excluded = new Set(normalizeMatchupKeyList(excludedKeys));
-  const allCandidates: MatchupTinderMatchup[] = [];
-  const unseenCandidates: MatchupTinderMatchup[] = [];
+  const allCandidates: Array<MatchupTinderMatchup & { voteTotal: number }> = [];
+  const unseenCandidates: Array<MatchupTinderMatchup & { voteTotal: number }> = [];
 
   for (const offensePlayer of players) {
     for (const defensePlayer of players) {
@@ -95,11 +149,13 @@ export function buildNextMatchup(
       }
 
       const matchupKey = buildMatchupKey(offensePlayer.id, defensePlayer.id);
+      const undirectedMatchupKey = buildUndirectedMatchupKey(offensePlayer.id, defensePlayer.id);
       const matchup = {
         matchupKey,
         mode,
         offensePlayer,
-        defensePlayer
+        defensePlayer,
+        voteTotal: pairVoteTotals.get(undirectedMatchupKey) ?? 0
       };
 
       allCandidates.push(matchup);
@@ -110,5 +166,7 @@ export function buildNextMatchup(
     }
   }
 
-  return pickRandomItem(unseenCandidates.length > 0 ? unseenCandidates : allCandidates);
+  const candidatePool = unseenCandidates.length > 0 ? unseenCandidates : allCandidates;
+
+  return pickWeightedItem(candidatePool, (candidate) => getPairVoteWeight(candidate.voteTotal));
 }
