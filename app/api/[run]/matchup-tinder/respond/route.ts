@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
   buildMatchupKey,
+  buildMatchupPairVoteTotals,
   buildNextMatchup,
   isMatchupTinderMode,
   isMatchupTinderResult,
@@ -12,6 +13,7 @@ import { hasSupabasePublicConfig } from "@/lib/supabase/config";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 const MATCHUP_TINDER_PLAYER_SELECT_COLUMNS = "id,row_number,active,name";
+const MATCHUP_TINDER_RESPONSE_SELECT_COLUMNS = "offense_player_id,defense_player_id";
 
 type MatchupTinderRespondRequest = {
   offensePlayerId?: number;
@@ -99,12 +101,29 @@ export async function POST(
     );
   }
 
+  const players = matchupTinderPlayersFromRows(data ?? []);
+  const playerIds = players.map((player) => player.id);
+
+  const { data: responseRows, error: responseError } = await supabase
+    .from("matchup_tinder_responses")
+    .select(MATCHUP_TINDER_RESPONSE_SELECT_COLUMNS)
+    .eq("mode", "play")
+    .in("offense_player_id", playerIds)
+    .in("defense_player_id", playerIds);
+
+  if (responseError) {
+    return NextResponse.json(
+      { ok: true, nextMatchup: null },
+      { status: 200 }
+    );
+  }
+
   const seenMatchupKeys = normalizeMatchupKeyList([
     ...(body.seenMatchupKeys ?? []),
     buildMatchupKey(offensePlayerId, defensePlayerId)
   ]);
-  const players = matchupTinderPlayersFromRows(data ?? []);
-  const nextMatchup = buildNextMatchup(players, seenMatchupKeys, body.mode);
+  const pairVoteTotals = buildMatchupPairVoteTotals(responseRows ?? []);
+  const nextMatchup = buildNextMatchup(players, seenMatchupKeys, body.mode, pairVoteTotals);
 
   return NextResponse.json({
     ok: true,
