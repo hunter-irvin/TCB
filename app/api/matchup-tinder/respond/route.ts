@@ -9,10 +9,10 @@ import {
   normalizeMatchupKeyList
 } from "@/lib/matchup-tinder";
 import { hasSupabasePublicConfig } from "@/lib/supabase/config";
+import { fetchAllMatchupTinderVoteRows } from "@/lib/supabase/matchup-tinder-responses";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 const MATCHUP_TINDER_PLAYER_SELECT_COLUMNS = "id,row_number,active,name";
-const MATCHUP_TINDER_RESPONSE_SELECT_COLUMNS = "offense_player_id,defense_player_id";
 
 type MatchupTinderRespondRequest = {
   offensePlayerId?: number;
@@ -62,26 +62,27 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unable to record matchup response." }, { status: 500 });
   }
 
-  const [{ data, error: playersError }, { data: responseRows, error: responseError }] = await Promise.all([
-    supabase
-      .from("players")
-      .select(MATCHUP_TINDER_PLAYER_SELECT_COLUMNS)
-      .eq("active", true)
-      .order("row_number", { ascending: true }),
-    supabase
-      .from("matchup_tinder_responses")
-      .select(MATCHUP_TINDER_RESPONSE_SELECT_COLUMNS)
-      .eq("mode", "play")
-  ]);
+  let data = null;
+  let playersError = null;
+  let responseRows = [];
 
-  if (playersError) {
+  try {
+    [{ data, error: playersError }, responseRows] = await Promise.all([
+      supabase
+        .from("players")
+        .select(MATCHUP_TINDER_PLAYER_SELECT_COLUMNS)
+        .eq("active", true)
+        .order("row_number", { ascending: true }),
+      fetchAllMatchupTinderVoteRows(supabase)
+    ]);
+  } catch {
     return NextResponse.json(
       { ok: true, nextMatchup: null },
       { status: 200 }
     );
   }
 
-  if (responseError) {
+  if (playersError) {
     return NextResponse.json(
       { ok: true, nextMatchup: null },
       { status: 200 }
@@ -93,7 +94,7 @@ export async function POST(request: NextRequest) {
     buildMatchupKey(offensePlayerId, defensePlayerId)
   ]);
   const players = matchupTinderPlayersFromRows(data ?? []);
-  const pairVoteTotals = buildMatchupPairVoteTotals(responseRows ?? []);
+  const pairVoteTotals = buildMatchupPairVoteTotals(responseRows);
   const nextMatchup = buildNextMatchup(players, seenMatchupKeys, body.mode, pairVoteTotals);
 
   return NextResponse.json({

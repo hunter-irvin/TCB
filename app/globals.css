@@ -2212,7 +2212,7 @@ select {
 
 .scenario-matchup-overall-row {
   display: grid;
-  grid-template-columns: 74px minmax(0, 1fr);
+  grid-template-columns: 120px minmax(0, 1fr);
   gap: 8px;
   align-items: center;
 }
@@ -2227,6 +2227,7 @@ select {
   color: #f8fafc;
   text-align: right;
   line-height: 1.15;
+  word-break: break-word;
 }
 
 .scenario-matchup-overall-metrics {
@@ -2331,7 +2332,7 @@ select {
 
 .scenario-matchup-chord-label {
   fill: var(--text);
-  font-size: 0.7rem;
+  font-size: 0.6rem;
   font-weight: 800;
   letter-spacing: 0.01em;
 }
@@ -2393,6 +2394,7 @@ select {
   font-weight: 800;
   text-transform: uppercase;
   letter-spacing: 0.04em;
+  line-height: 1.25;
 }
 
 .scenario-head-to-head-column-label.defense {

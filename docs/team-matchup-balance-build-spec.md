@@ -7,8 +7,8 @@
 | 1 | Finalize matchup scoring rules | Completed | Offense and defense assignments are solved independently. | Unit-test independent offense/defense assignment solving; unit-test fair deadband at `-0.3`, `0`, and `+0.3`; unit-test missing matchup data returns neutral `0`. |
 | 2 | Define scenario ranking priorities | Completed | Full rosters first, then fair-pair count, then unfairness magnitude, then net-advantage spread. | Unit-test candidate ordering with hand-built fixtures covering each tie-break layer; verify a full-roster candidate beats a partial candidate even with worse matchup totals. |
 | 3 | Add matchup-balance scoring library | Completed | `lib/team-matchup-balance.ts` now builds score lookup, solves assignments, evaluates scenarios, and suggests swaps. | Unit-test player-pair aggregation from matchup rows; unit-test `5!` assignment ranking with deterministic fixtures; unit-test team-pair and whole-scenario report shapes. |
-| 4 | Load matchup response data into Teams page | Completed | Teams page now loads run-scoped matchup visualizer bundle data and derives matchup lookup state. | Manual test that only current-run players and matchup rows are used; verify no cross-run leakage by switching runs; verify loading and empty-data states. |
-| 5 | Add `Balance Matchup` button and action mode | Completed | Added beside existing actions and wired into scenario generation summary/loading state. | Manual test button renders beside existing actions; verify loading state, disabled state, and summary copy; verify existing buttons still work. |
+| 4 | Load matchup response data into Teams page | Completed | Teams page now fetches the run-scoped matchup visualizer chord bundle client-side and derives matchup lookup state with `loading` / `ready` / `error` gating. | Manual test that only current-run players and matchup rows are used; verify no cross-run leakage by switching runs; verify loading and empty-data states. |
+| 5 | Add `Balance Matchup` button and action mode | Completed | Internal action mode is `balanceMatchup`; the user-facing autofill button label is `Matchups` and it is disabled until matchup data is ready. | Manual test button renders beside existing actions; verify loading state, disabled state, and summary copy; verify existing buttons still work. |
 | 6 | Rank random scenario candidates with matchup scoring | Completed | Current generator reuses the random fill path and ranks candidates by matchup report. | Unit-test candidate sorter with deterministic fixtures; manual test repeated runs produce full rosters when possible; compare selected candidate against a known weaker candidate fixture. |
 | 7 | Add analytics tab switch | Completed | Each scenario now has `Stats Comparison` and `Matchup Comparison`. | Manual test tab switching per scenario; verify active tab does not affect other scenario cards; verify keyboard focus and aria roles if used. |
 | 8 | Keep existing stats charts under `Stats Comparison` | Completed | Existing stats charts remain available and unchanged in the stats tab. | Visual regression/manual comparison against current charts; verify totals, labels, tooltips, and layout are unchanged under `Stats Comparison`. |
@@ -133,9 +133,11 @@
 
 Add a new balancing strategy to the Teams page called `Balance Matchup` that evaluates randomly generated full-roster scenarios using matchup visualizer data rather than only player attribute totals.
 
+In the shipped UI, this strategy is exposed through the `Matchups` autofill button while the internal mode/state name remains `balanceMatchup`.
+
 The first version should:
 
-- add a new `Balance Matchup` button beside the existing balance actions
+- add a new matchup-balancing autofill action beside the existing balance actions
 - use the current run's matchup response data
 - work for `2`, `3`, or `4` teams
 - always evaluate teams as `5` players per team
@@ -254,7 +256,7 @@ For each perspective:
 
 - enumerate all `5! = 120` one-to-one assignments
 - score every assignment
-- keep any equally optimal assignment if there is a tie
+- keep the first best-ranked assignment encountered; exact ties are acceptable and do not require storing alternates
 
 This brute-force search is acceptable because the assignment size is fixed and small.
 
@@ -279,7 +281,7 @@ For each unordered team pair, compute:
 - defense cumulative score
 - overall cumulative score
 
-Recommended formulas:
+Current formulas:
 
 - `offenseCumulativeScore = sum(rawScore of the 5 chosen offense pairs)`
 - `defenseCumulativeScore = sum(rawScore of the 5 chosen defense pairs)`
@@ -293,6 +295,8 @@ Rank scenario candidates in this order:
 2. highest total fair-pair count across all team-pair offense and defense assignments
 3. lowest total unfairness magnitude across all chosen pairings
 4. lowest spread in team net overall advantage
+
+If two candidates still tie after those four checks, the current implementation falls back to stable assignment-signature ordering.
 
 Team net overall advantage should be derived by summing each team's cumulative overall matchup scores against every other team.
 
@@ -413,74 +417,100 @@ Current behavior:
   - offense advantage score
   - vote total
 
-## Data Shape Recommendation
+## Implemented Data Shape
 
-Create a new shared library, recommended path:
+The shared scoring library now lives at:
 
 - `lib/team-matchup-balance.ts`
 
-Recommended types:
+Current exported types:
 
 ```ts
-type MatchupPerspective = "overall" | "offense" | "defense";
+type TeamMatchupPairScore = {
+  rawScore: number;
+  normalizedScore: number;
+  colorHex: string;
+  isFair: boolean;
+  voteTotal: number;
+};
 
-type ChosenPlayerPair = {
+type TeamMatchupChosenPair = {
   sourcePlayerId: number;
   targetPlayerId: number;
   rawScore: number;
   normalizedScore: number;
+  colorHex: string;
   isFair: boolean;
+  voteTotal: number;
 };
 
-type TeamPairPerspectiveReport = {
+type TeamMatchupPerspectiveReport = {
   sourceTeamId: string;
   targetTeamId: string;
-  pairs: ChosenPlayerPair[];
+  pairCount: number;
+  pairs: TeamMatchupChosenPair[];
   fairPairCount: number;
   unfairnessMagnitude: number;
   cumulativeScore: number;
+  averageScore: number;
+  normalizedScore: number;
+  colorHex: string;
 };
 
-type TeamPairMatchupReport = {
+type TeamMatchupPairReport = {
   leftTeamId: string;
   rightTeamId: string;
-  offense: TeamPairPerspectiveReport;
-  defense: TeamPairPerspectiveReport;
+  offense: TeamMatchupPerspectiveReport;
+  defense: TeamMatchupPerspectiveReport;
   overallCumulativeScore: number;
 };
 
-type TeamNetAdvantage = {
+type TeamMatchupNetAdvantage = {
   teamId: string;
   overall: number;
   offense: number;
   defense: number;
 };
 
+type TeamMatchupDirectionalEdge = {
+  sourceTeamId: string;
+  targetTeamId: string;
+  cumulativeScore: number;
+  averageScore: number;
+  normalizedScore: number;
+  colorHex: string;
+};
+
 type ScenarioMatchupReport = {
-  teamPairs: TeamPairMatchupReport[];
-  teamNetAdvantages: TeamNetAdvantage[];
+  teamPairs: TeamMatchupPairReport[];
+  teamNetAdvantages: TeamMatchupNetAdvantage[];
   totalFairPairCount: number;
   totalUnfairnessMagnitude: number;
   overallNetSpread: number;
+  offenseEdges: TeamMatchupDirectionalEdge[];
+  defenseEdges: TeamMatchupDirectionalEdge[];
 };
 
-type MatchupBalancedCandidate = {
-  assignments: Assignments;
-  signature: string;
-  filledCount: number;
-  matchupReport: ScenarioMatchupReport;
+type ScenarioMatchupSwapSuggestion = {
+  sourceTeamId: string;
+  targetTeamId: string;
+  sourcePlayerId: number;
+  targetPlayerId: number;
+  nextReport: ScenarioMatchupReport;
 };
 ```
 
-The exact names can change, but the selected scenario should retain:
+The selected scenario now retains:
 
 - chosen player-pair assignments
 - team-pair offense totals
 - team-pair defense totals
 - team-pair overall totals
 - team net advantages
+- precomputed offense and defense directional edges for the team diagrams
+- per-pair vote totals and color values for head-to-head drill-down rendering
 
-## Teams Page Integration Plan
+## Teams Page Integration
 
 Primary file:
 
@@ -488,14 +518,14 @@ Primary file:
 
 ### Scenario Action Modes
 
-Extend current action modes:
+Current action modes:
 
 - `randomize`
 - `balanceOverall`
 - `balanceCategories`
 - `balanceMatchup`
 
-Update:
+Implemented updates:
 
 - action state types
 - summary types
@@ -504,9 +534,9 @@ Update:
 
 ### Candidate Generation
 
-Do not create a separate constructive team-building engine for phase one.
+The current implementation does not create a separate constructive team-building engine.
 
-Instead:
+Instead it:
 
 - reuse `randomizeRemainingAssignments(...)`
 - reuse the current repeated-candidate generation flow
@@ -516,72 +546,41 @@ This keeps implementation risk lower and makes comparison with the current strat
 
 ### Matchup Data Loading
 
-The Teams page will need matchup response data for the active run.
+The Teams page currently:
 
-Recommended approach:
+- fetches [app/api/[run]/matchup-visualizer/chord/route.ts](/c:/Users/irvinh/OneDrive%20-%20Jacobs%20Engineering%20Group%20Inc/Desktop/Repos/TCB/TCB/app/api/[run]/matchup-visualizer/chord/route.ts) through `buildRunApiPath(run.slug, "matchup-visualizer/chord")`
+- requests the payload with `cache: "no-store"`
+- stores bundle state as `loading`, `ready`, or `error`
+- disables the `Matchups` autofill button until the bundle is `ready`
+- surfaces route-loading failures through the button tooltip and the local error state
 
-- fetch run-scoped player rows already in scope
-- fetch run-scoped matchup response rows using the same filtering discipline as the matchup visualizer route
-- memoize derived directional pair scores in the Teams page or in the new library helper
+## Implementation Breakdown
 
-This can happen client-side in phase one if the existing Teams page data model remains manageable.
+### Shared Matchup Scoring Helpers
 
-If client complexity becomes too high, a follow-up refactor can move candidate scoring behind a route handler.
+- `lib/team-matchup-balance.ts` builds directional lookup maps from the matchup visualizer bundle
+- the solver enumerates one-to-one pairings and ranks them by fair-count first, then raw mismatch total
+- full-scenario reports retain team-pair totals, team net advantages, and precomputed diagram edges
 
-## Suggested Implementation Steps
+### Scenario Builder Integration
 
-### Phase 1: Shared Matchup Scoring Helpers
+- Teams page action types include `balanceMatchup`
+- the autofill action reuses `randomizeRemainingAssignments(...)` and the current repeated-candidate generation flow
+- full-roster candidates are preferred, with partial candidates used only as fallback
+- selected candidates retain the matchup report used for analytics and swap suggestions
 
-- create `lib/team-matchup-balance.ts`
-- add helpers to aggregate directional player matchup scores
-- add helper to enumerate and rank `5!` player-pair assignments
-- add helper to evaluate one team pair
-- add helper to evaluate a full scenario
+### Analytics UI
 
-### Phase 2: Scenario Builder Integration
+- scenario-local tabs now switch between `Matchup Comparison` and `Stats Comparison`
+- matchup analytics render `Optimization Results`, `Team Advantages`, `Offense`, and `Defense`
+- selecting a directional arrow swaps the opposite diagram card for the `Head to Head` drill-down card
+- click-out behavior clears head-to-head mode unless the click lands inside the drill-down card or on another diagram arrow
 
-- extend Teams page action types with `balanceMatchup`
-- load matchup response data into the Teams page
-- add `Balance Matchup` button
-- rank generated full-roster candidates using scenario matchup reports
-- save the selected candidate's matchup report in scenario summary state or adjacent scenario-local state
+### Same-Day Matchup Tinder Follow-Up
 
-### Phase 3: Analytics Mode Switch
-
-- add `Stats Comparison` / `Matchup Comparison` UI tabs
-- keep current stats charts as-is
-- introduce matchup analytics layout container
-
-### Phase 4: Matchup Charts
-
-- add `Optimization Results`
-- add `Team Advantages` net advantage bar chart
-- add `Offense` team diagram
-- add `Defense` team diagram
-- add `Head to Head` drill-down replacement card
-- reuse existing matchup visualizer color logic and SVG patterns where practical
-
-### Phase 5: Focused Interaction Polish
-
-- add team and arrow hover/selection states
-- add chart tooltips
-- add focused-card dark treatments
-- add click-out behavior
-- add head-to-head slide-in animation
-
-### Phase 6: Next Scoring Follow-Up
-
-- revisit whether fair-band values should eventually influence color intensity
-- consider adding dedicated automated test coverage for matchup scoring
-- compare `2`, `3`, and `4` team outputs after the raw mismatch update
-
-### Phase 7: Verification
-
-- verify for `2`, `3`, and `4` teams
-- verify scenarios with complete matchup data
-- verify sparse data treats missing pairs as neutral
-- verify no-data state behaves sensibly
-- compare `Balance Matchup` outputs with `Balance Overall` and `Balance Categories`
+- [lib/matchup-tinder.ts](/c:/Users/irvinh/OneDrive%20-%20Jacobs%20Engineering%20Group%20Inc/Desktop/Repos/TCB/TCB/lib/matchup-tinder.ts) now tracks undirected pair vote totals
+- both `next` routes weight candidate matchups toward lower-vote pairs
+- both `respond` routes reload pair vote totals after recording a vote so the next returned matchup uses the same weighting rules
 
 ## Edge Cases
 
@@ -627,16 +626,22 @@ If all team-pair player matchup scores collapse to zero:
 - row-level head-to-head tooltips show offense advantage and vote totals
 - the analytics section remains usable on narrow screens
 
-## Files Likely Touched
+## Files Touched on April 1, 2026
 
 - [components/teams-page.tsx](/c:/Users/irvinh/OneDrive%20-%20Jacobs%20Engineering%20Group%20Inc/Desktop/Repos/TCB/TCB/components/teams-page.tsx)
+- [lib/team-matchup-balance.ts](/c:/Users/irvinh/OneDrive%20-%20Jacobs%20Engineering%20Group%20Inc/Desktop/Repos/TCB/TCB/lib/team-matchup-balance.ts)
 - [lib/matchup-visualizer.ts](/c:/Users/irvinh/OneDrive%20-%20Jacobs%20Engineering%20Group%20Inc/Desktop/Repos/TCB/TCB/lib/matchup-visualizer.ts)
+- [lib/matchup-tinder.ts](/c:/Users/irvinh/OneDrive%20-%20Jacobs%20Engineering%20Group%20Inc/Desktop/Repos/TCB/TCB/lib/matchup-tinder.ts)
 - [app/api/[run]/matchup-visualizer/chord/route.ts](/c:/Users/irvinh/OneDrive%20-%20Jacobs%20Engineering%20Group%20Inc/Desktop/Repos/TCB/TCB/app/api/[run]/matchup-visualizer/chord/route.ts)
+- [app/api/[run]/matchup-tinder/next/route.ts](/c:/Users/irvinh/OneDrive%20-%20Jacobs%20Engineering%20Group%20Inc/Desktop/Repos/TCB/TCB/app/api/[run]/matchup-tinder/next/route.ts)
+- [app/api/[run]/matchup-tinder/respond/route.ts](/c:/Users/irvinh/OneDrive%20-%20Jacobs%20Engineering%20Group%20Inc/Desktop/Repos/TCB/TCB/app/api/[run]/matchup-tinder/respond/route.ts)
+- [app/api/matchup-tinder/next/route.ts](/c:/Users/irvinh/OneDrive%20-%20Jacobs%20Engineering%20Group%20Inc/Desktop/Repos/TCB/TCB/app/api/matchup-tinder/next/route.ts)
+- [app/api/matchup-tinder/respond/route.ts](/c:/Users/irvinh/OneDrive%20-%20Jacobs%20Engineering%20Group%20Inc/Desktop/Repos/TCB/TCB/app/api/matchup-tinder/respond/route.ts)
 - [app/globals.css](/c:/Users/irvinh/OneDrive%20-%20Jacobs%20Engineering%20Group%20Inc/Desktop/Repos/TCB/TCB/app/globals.css)
-- `lib/team-matchup-balance.ts`
+- [docs/team-matchup-balance-build-spec.md](/c:/Users/irvinh/OneDrive%20-%20Jacobs%20Engineering%20Group%20Inc/Desktop/Repos/TCB/TCB/docs/team-matchup-balance-build-spec.md)
 
 ## Open Questions for Later
 
 - Should `Balance Matchup` eventually get a second-pass local swap optimizer after random candidate generation?
 - Should matchup candidate scoring move server-side if client-side evaluation becomes too heavy?
-- Should the future drill-down compare the chosen pair assignments only, or also expose raw all-vs-all team matrices?
+- Should a future drill-down add a raw all-vs-all team matrix beside the current chosen-assignment view?

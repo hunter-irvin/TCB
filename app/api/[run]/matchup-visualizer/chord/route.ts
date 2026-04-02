@@ -6,10 +6,10 @@ import {
 } from "@/lib/matchup-visualizer";
 import { getRunBySlug } from "@/lib/runs";
 import { hasSupabasePublicConfig } from "@/lib/supabase/config";
+import { fetchAllMatchupVisualizerResponseRows } from "@/lib/supabase/matchup-tinder-responses";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 const PLAYER_SELECT_COLUMNS = "id,row_number,active,name";
-const RESPONSE_SELECT_COLUMNS = "offense_player_id,defense_player_id,result";
 
 export async function GET(
   _request: Request,
@@ -50,20 +50,17 @@ export async function GET(
     );
   }
 
-  const { data: responseRows, error: responseError } = await supabase
-    .from("matchup_tinder_responses")
-    .select(RESPONSE_SELECT_COLUMNS)
-    .eq("mode", "play")
-    .in("offense_player_id", playerIds)
-    .in("defense_player_id", playerIds);
+  let responseRows = [];
 
-  if (responseError) {
+  try {
+    responseRows = await fetchAllMatchupVisualizerResponseRows(supabase, playerIds);
+  } catch {
     return NextResponse.json({ error: "Unable to load matchup response data." }, { status: 500 });
   }
 
   const payload = buildMatchupVisualizerBundleResponse(
     nodes,
-    responseRows ?? [],
+    responseRows,
     MATCHUP_VISUALIZER_MIN_COUNT
   );
 

@@ -81,6 +81,14 @@ export type ScenarioMatchupSwapSuggestion = {
   nextReport: ScenarioMatchupReport;
 };
 
+export type ScenarioMatchupOptimizationGoal = "goal1" | "goal2" | "goal3";
+
+export type ScenarioMatchupSwapSuggestions = {
+  goal1: ScenarioMatchupSwapSuggestion | null;
+  goal2: ScenarioMatchupSwapSuggestion | null;
+  goal3: ScenarioMatchupSwapSuggestion | null;
+};
+
 export type MatchupScoreLookup = {
   offense: Map<string, TeamMatchupPairScore>;
   defense: Map<string, TeamMatchupPairScore>;
@@ -203,20 +211,92 @@ function isCompleteScenario(assignments: Assignments, teams: Team[]) {
   );
 }
 
-function isBetterScenarioReport(candidate: ScenarioMatchupReport, currentBest: ScenarioMatchupReport) {
-  if (candidate.totalFairPairCount !== currentBest.totalFairPairCount) {
-    return candidate.totalFairPairCount > currentBest.totalFairPairCount;
+function isScenarioReportPrimaryMetricImproved(
+  goal: ScenarioMatchupOptimizationGoal,
+  candidate: ScenarioMatchupReport,
+  baseline: ScenarioMatchupReport
+) {
+  if (goal === "goal1") {
+    return candidate.totalFairPairCount > baseline.totalFairPairCount;
   }
 
-  if (candidate.totalUnfairnessMagnitude !== currentBest.totalUnfairnessMagnitude) {
-    return candidate.totalUnfairnessMagnitude < currentBest.totalUnfairnessMagnitude;
+  if (goal === "goal2") {
+    return candidate.totalUnfairnessMagnitude < baseline.totalUnfairnessMagnitude;
   }
 
-  if (candidate.overallNetSpread !== currentBest.overallNetSpread) {
-    return candidate.overallNetSpread < currentBest.overallNetSpread;
+  return candidate.overallNetSpread < baseline.overallNetSpread;
+}
+
+function compareScenarioReportsForGoal(
+  goal: ScenarioMatchupOptimizationGoal,
+  candidate: ScenarioMatchupReport,
+  comparison: ScenarioMatchupReport
+) {
+  if (goal === "goal1") {
+    if (candidate.totalFairPairCount !== comparison.totalFairPairCount) {
+      return candidate.totalFairPairCount - comparison.totalFairPairCount;
+    }
+
+    if (candidate.totalUnfairnessMagnitude !== comparison.totalUnfairnessMagnitude) {
+      return comparison.totalUnfairnessMagnitude - candidate.totalUnfairnessMagnitude;
+    }
+
+    if (candidate.overallNetSpread !== comparison.overallNetSpread) {
+      return comparison.overallNetSpread - candidate.overallNetSpread;
+    }
+
+    return 0;
   }
 
-  return false;
+  if (goal === "goal2") {
+    if (candidate.totalUnfairnessMagnitude !== comparison.totalUnfairnessMagnitude) {
+      return comparison.totalUnfairnessMagnitude - candidate.totalUnfairnessMagnitude;
+    }
+
+    if (candidate.totalFairPairCount !== comparison.totalFairPairCount) {
+      return candidate.totalFairPairCount - comparison.totalFairPairCount;
+    }
+
+    if (candidate.overallNetSpread !== comparison.overallNetSpread) {
+      return comparison.overallNetSpread - candidate.overallNetSpread;
+    }
+
+    return 0;
+  }
+
+  if (candidate.overallNetSpread !== comparison.overallNetSpread) {
+    return comparison.overallNetSpread - candidate.overallNetSpread;
+  }
+
+  if (candidate.totalFairPairCount !== comparison.totalFairPairCount) {
+    return candidate.totalFairPairCount - comparison.totalFairPairCount;
+  }
+
+  if (candidate.totalUnfairnessMagnitude !== comparison.totalUnfairnessMagnitude) {
+    return comparison.totalUnfairnessMagnitude - candidate.totalUnfairnessMagnitude;
+  }
+
+  return 0;
+}
+
+function buildSwapSuggestionKey(suggestion: ScenarioMatchupSwapSuggestion) {
+  return `${suggestion.sourceTeamId}:${suggestion.sourcePlayerId}:${suggestion.targetTeamId}:${suggestion.targetPlayerId}`;
+}
+
+function isBetterScenarioReportForGoal(
+  goal: ScenarioMatchupOptimizationGoal,
+  candidate: ScenarioMatchupReport,
+  comparison: ScenarioMatchupReport
+) {
+  return compareScenarioReportsForGoal(goal, candidate, comparison) > 0;
+}
+
+function createEmptyScenarioMatchupSwapSuggestions(): ScenarioMatchupSwapSuggestions {
+  return {
+    goal1: null,
+    goal2: null,
+    goal3: null
+  };
 }
 
 function swapAssignedPlayers(
@@ -529,11 +609,28 @@ export function findBestScenarioMatchupSwap(
   lookup: MatchupScoreLookup,
   currentReport: ScenarioMatchupReport = buildScenarioMatchupReport(assignments, teams, lookup)
 ): ScenarioMatchupSwapSuggestion | null {
+  return findBestScenarioMatchupSwapSuggestions(
+    assignments,
+    teams,
+    playersById,
+    lookup,
+    currentReport
+  ).goal1;
+}
+
+export function findBestScenarioMatchupSwapSuggestions(
+  assignments: Assignments,
+  teams: Team[],
+  playersById: ReadonlyMap<number, Player>,
+  lookup: MatchupScoreLookup,
+  currentReport: ScenarioMatchupReport = buildScenarioMatchupReport(assignments, teams, lookup)
+): ScenarioMatchupSwapSuggestions {
   if (!isCompleteScenario(assignments, teams)) {
-    return null;
+    return createEmptyScenarioMatchupSwapSuggestions();
   }
 
-  let bestSuggestion: ScenarioMatchupSwapSuggestion | null = null;
+  const bestSuggestions = createEmptyScenarioMatchupSwapSuggestions();
+  const goals: ScenarioMatchupOptimizationGoal[] = ["goal1", "goal2", "goal3"];
 
   for (let leftIndex = 0; leftIndex < teams.length; leftIndex += 1) {
     const leftTeam = teams[leftIndex];
@@ -579,11 +676,6 @@ export function findBestScenarioMatchupSwap(
             rightPosition
           );
           const nextReport = buildScenarioMatchupReport(nextAssignments, teams, lookup);
-
-          if (!isBetterScenarioReport(nextReport, currentReport)) {
-            continue;
-          }
-
           const candidateSuggestion: ScenarioMatchupSwapSuggestion = {
             sourceTeamId: leftTeam.id,
             targetTeamId: rightTeam.id,
@@ -592,23 +684,26 @@ export function findBestScenarioMatchupSwap(
             nextReport
           };
 
-          if (!bestSuggestion || isBetterScenarioReport(nextReport, bestSuggestion.nextReport)) {
-            bestSuggestion = candidateSuggestion;
-            continue;
-          }
+          for (const goal of goals) {
+            if (!isScenarioReportPrimaryMetricImproved(goal, nextReport, currentReport)) {
+              continue;
+            }
 
-          if (
-            bestSuggestion &&
-            !isBetterScenarioReport(bestSuggestion.nextReport, nextReport) &&
-            `${leftTeam.id}:${leftPlayerId}:${rightTeam.id}:${rightPlayerId}` <
-              `${bestSuggestion.sourceTeamId}:${bestSuggestion.sourcePlayerId}:${bestSuggestion.targetTeamId}:${bestSuggestion.targetPlayerId}`
-          ) {
-            bestSuggestion = candidateSuggestion;
+            const currentBest = bestSuggestions[goal];
+
+            if (
+              !currentBest ||
+              isBetterScenarioReportForGoal(goal, nextReport, currentBest.nextReport) ||
+              (!isBetterScenarioReportForGoal(goal, currentBest.nextReport, nextReport) &&
+                buildSwapSuggestionKey(candidateSuggestion) < buildSwapSuggestionKey(currentBest))
+            ) {
+              bestSuggestions[goal] = candidateSuggestion;
+            }
           }
         }
       }
     }
   }
 
-  return bestSuggestion;
+  return bestSuggestions;
 }

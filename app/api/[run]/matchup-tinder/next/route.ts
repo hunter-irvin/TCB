@@ -8,10 +8,10 @@ import {
 } from "@/lib/matchup-tinder";
 import { getRunBySlug } from "@/lib/runs";
 import { hasSupabasePublicConfig } from "@/lib/supabase/config";
+import { fetchAllMatchupTinderVoteRows } from "@/lib/supabase/matchup-tinder-responses";
 import { getSupabaseServerClient } from "@/lib/supabase/server";
 
 const MATCHUP_TINDER_PLAYER_SELECT_COLUMNS = "id,row_number,active,name";
-const MATCHUP_TINDER_RESPONSE_SELECT_COLUMNS = "offense_player_id,defense_player_id";
 
 function getExcludeKeys(searchParams: URLSearchParams) {
   return normalizeMatchupKeyList(
@@ -63,18 +63,12 @@ export async function GET(
   let pairVoteTotals = new Map<string, number>();
 
   if (playerIds.length > 0) {
-    const { data: responseRows, error: responseError } = await supabase
-      .from("matchup_tinder_responses")
-      .select(MATCHUP_TINDER_RESPONSE_SELECT_COLUMNS)
-      .eq("mode", "play")
-      .in("offense_player_id", playerIds)
-      .in("defense_player_id", playerIds);
-
-    if (responseError) {
+    try {
+      const responseRows = await fetchAllMatchupTinderVoteRows(supabase, playerIds);
+      pairVoteTotals = buildMatchupPairVoteTotals(responseRows);
+    } catch {
       return NextResponse.json({ error: "Unable to load matchup response data." }, { status: 500 });
     }
-
-    pairVoteTotals = buildMatchupPairVoteTotals(responseRows ?? []);
   }
 
   const matchup = buildNextMatchup(

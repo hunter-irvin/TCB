@@ -37,15 +37,15 @@ import {
 import {
   buildMatchupScoreLookup,
   buildScenarioMatchupReport,
-  findBestScenarioMatchupSwap,
+  findBestScenarioMatchupSwapSuggestions,
   type MatchupScoreLookup,
   type TeamMatchupChosenPair,
   type ScenarioMatchupReport,
   type ScenarioMatchupSwapSuggestion,
+  type ScenarioMatchupSwapSuggestions,
   type TeamMatchupDirectionalEdge
 } from "@/lib/team-matchup-balance";
 import {
-  abbreviateVisualizerName,
   interpolateUnifiedMatchupColor,
   normalizeUnifiedColorScore,
   type MatchupVisualizerBundleResponse
@@ -126,6 +126,7 @@ type TeamBalanceTotals = {
 type BalanceSelectionMode = "overall" | "categories";
 type ScenarioActionMode = ScenarioActionState["mode"];
 type ScenarioAnalyticsMode = "stats" | "matchup";
+type ScenarioGoalLabel = "Goal 1" | "Goal 2" | "Goal 3";
 type HeadToHeadSelection = {
   perspective: "offense" | "defense";
   sourceTeamId: string;
@@ -360,6 +361,28 @@ function getChartTeamLabelLines(name: string) {
 function getChartSegmentColor(teamColor: string, index: number) {
   const tintStrength = [92, 82, 72][index] ?? 72;
   return `color-mix(in srgb, ${teamColor} ${tintStrength}%, white ${100 - tintStrength}%)`;
+}
+
+function buildScenarioSwapHelperText(
+  goalLabel: ScenarioGoalLabel,
+  suggestion: ScenarioMatchupSwapSuggestion | null,
+  isScenarioComplete: boolean,
+  playersById: ReadonlyMap<number, Player>
+) {
+  if (!isScenarioComplete) {
+    return "Complete the roster to get swap suggestions.";
+  }
+
+  if (!suggestion) {
+    return `No player trade improves ${goalLabel} right now.`;
+  }
+
+  const sourcePlayerName =
+    playersById.get(suggestion.sourcePlayerId)?.name.trim() || `Player ${suggestion.sourcePlayerId}`;
+  const targetPlayerName =
+    playersById.get(suggestion.targetPlayerId)?.name.trim() || `Player ${suggestion.targetPlayerId}`;
+
+  return `Trade ${sourcePlayerName} and ${targetPlayerName} to improve ${goalLabel}.`;
 }
 
 function getScenarioChartSegmentBackground(
@@ -1379,17 +1402,21 @@ function TeamsContent() {
           return [
             scenario.id,
             isComplete
-              ? findBestScenarioMatchupSwap(
+              ? findBestScenarioMatchupSwapSuggestions(
                   scenario.assignments,
                   teams,
                   playerById,
                   matchupLookup,
                   scenarioMatchupReports[scenario.id]
                 )
-              : null
+              : {
+                  goal1: null,
+                  goal2: null,
+                  goal3: null
+                }
           ] as const;
         })
-      ) as Record<string, ScenarioMatchupSwapSuggestion | null>,
+      ) as Record<string, ScenarioMatchupSwapSuggestions>,
     [matchupLookup, playerById, scenarioMatchupReports, scenarios, teams]
   );
 
@@ -3512,19 +3539,32 @@ function TeamsContent() {
           const hasAssignedPlayers = teams.some((team) =>
             POSITIONS.some((position) => (scenario.assignments[team.id]?.[position] ?? null) !== null)
           );
-          const analyticsMode = analyticsModeByScenario[scenario.id] ?? "stats";
+          const analyticsMode = analyticsModeByScenario[scenario.id] ?? "matchup";
           const isScenarioComplete =
             countFilledAssignments(scenario.assignments) === teams.length * POSITIONS.length;
-          const swapSuggestion = scenarioMatchupSwapSuggestions[scenario.id] ?? null;
-          const swapSuggestionText = !isScenarioComplete
-            ? "Complete the roster to get swap suggestions"
-            : swapSuggestion
-              ? `To better balance the teams, consider swapping ${
-                  playerById.get(swapSuggestion.sourcePlayerId)?.name.trim() || `Player ${swapSuggestion.sourcePlayerId}`
-                } and ${
-                  playerById.get(swapSuggestion.targetPlayerId)?.name.trim() || `Player ${swapSuggestion.targetPlayerId}`
-                }.`
-              : "These teams are already close to the best matchup balance.";
+          const swapSuggestions = scenarioMatchupSwapSuggestions[scenario.id] ?? {
+            goal1: null,
+            goal2: null,
+            goal3: null
+          };
+          const goal1SwapSuggestionText = buildScenarioSwapHelperText(
+            "Goal 1",
+            swapSuggestions.goal1,
+            isScenarioComplete,
+            playerById
+          );
+          const goal2SwapSuggestionText = buildScenarioSwapHelperText(
+            "Goal 2",
+            swapSuggestions.goal2,
+            isScenarioComplete,
+            playerById
+          );
+          const goal3SwapSuggestionText = buildScenarioSwapHelperText(
+            "Goal 3",
+            swapSuggestions.goal3,
+            isScenarioComplete,
+            playerById
+          );
           const scenarioCollapsed = Boolean(scenarioReorder) || scenario.collapsed;
           const scenarioIsDragging = scenarioReorder?.scenarioId === scenario.id;
           const deleteModalOpen = scenarioPendingDeleteId === scenario.id;
@@ -3922,7 +3962,9 @@ function TeamsContent() {
                     analyticsMode={analyticsMode}
                     charts={scenarioCharts}
                     matchupReport={scenarioMatchupReport}
-                    matchupHelperText={swapSuggestionText}
+                    goal1SwapHelperText={goal1SwapSuggestionText}
+                    goal2SwapHelperText={goal2SwapSuggestionText}
+                    goal3SwapHelperText={goal3SwapSuggestionText}
                     playersById={playerById}
                     teams={teams}
                     onAnalyticsModeChange={(mode) =>
@@ -4444,7 +4486,9 @@ function ScenarioAnalyticsSection({
   analyticsMode,
   charts,
   matchupReport,
-  matchupHelperText,
+  goal1SwapHelperText,
+  goal2SwapHelperText,
+  goal3SwapHelperText,
   playersById,
   teams,
   onAnalyticsModeChange
@@ -4452,7 +4496,9 @@ function ScenarioAnalyticsSection({
   analyticsMode: ScenarioAnalyticsMode;
   charts: ScenarioAttributeChart[];
   matchupReport: ScenarioMatchupReport;
-  matchupHelperText: string;
+  goal1SwapHelperText: string;
+  goal2SwapHelperText: string;
+  goal3SwapHelperText: string;
   playersById: ReadonlyMap<number, Player>;
   teams: Team[];
   onAnalyticsModeChange: (mode: ScenarioAnalyticsMode) => void;
@@ -4481,7 +4527,9 @@ function ScenarioAnalyticsSection({
       ) : (
         <ScenarioMatchupCharts
           report={matchupReport}
-          helperText={matchupHelperText}
+          goal1SwapHelperText={goal1SwapHelperText}
+          goal2SwapHelperText={goal2SwapHelperText}
+          goal3SwapHelperText={goal3SwapHelperText}
           playersById={playersById}
           teams={teams}
         />
@@ -4492,12 +4540,16 @@ function ScenarioAnalyticsSection({
 
 function ScenarioMatchupCharts({
   report,
-  helperText,
+  goal1SwapHelperText,
+  goal2SwapHelperText,
+  goal3SwapHelperText,
   playersById,
   teams
 }: {
   report: ScenarioMatchupReport;
-  helperText: string;
+  goal1SwapHelperText: string;
+  goal2SwapHelperText: string;
+  goal3SwapHelperText: string;
   playersById: ReadonlyMap<number, Player>;
   teams: Team[];
 }) {
@@ -4544,7 +4596,13 @@ function ScenarioMatchupCharts({
         <div className="scenario-chart-header">
           <h2 className="scenario-chart-title">Optimization Results</h2>
         </div>
-        <OptimizationResultsCard report={report} helperText={helperText} teams={teams} />
+        <OptimizationResultsCard
+          report={report}
+          goal1SwapHelperText={goal1SwapHelperText}
+          goal2SwapHelperText={goal2SwapHelperText}
+          goal3SwapHelperText={goal3SwapHelperText}
+          teams={teams}
+        />
       </div>
       <div
         className={`scenario-chart-card scenario-matchup-card${isHeadToHeadMode ? " scenario-matchup-card-dimmed" : ""}`}
@@ -4613,28 +4671,39 @@ function ScenarioMatchupCharts({
 
 function OptimizationResultsCard({
   report,
-  helperText,
+  goal1SwapHelperText,
+  goal2SwapHelperText,
+  goal3SwapHelperText,
   teams
 }: {
   report: ScenarioMatchupReport;
-  helperText: string;
+  goal1SwapHelperText: string;
+  goal2SwapHelperText: string;
+  goal3SwapHelperText: string;
   teams: Team[];
 }) {
   const teamPairCount = (teams.length * (teams.length - 1)) / 2;
   const totalChosenMatchups = teamPairCount * 10;
   const fairMatchups = Math.min(report.totalFairPairCount, totalChosenMatchups);
   const fairWidth = totalChosenMatchups > 0 ? (fairMatchups / totalChosenMatchups) * 100 : 0;
-  const GOAL_SCORE_LIMIT = 10;
+  const MISMATCH_SCORE_LIMIT = 25;
+  const TEAM_ADVANTAGE_SCORE_LIMIT = 10;
   const mismatchScoreCompletion = Math.max(
     0,
-    Math.min(GOAL_SCORE_LIMIT, GOAL_SCORE_LIMIT - report.totalUnfairnessMagnitude)
+    Math.min(
+      MISMATCH_SCORE_LIMIT,
+      MISMATCH_SCORE_LIMIT - report.totalUnfairnessMagnitude
+    )
   );
-  const mismatchScoreWidth = (mismatchScoreCompletion / GOAL_SCORE_LIMIT) * 100;
+  const mismatchScoreWidth = (mismatchScoreCompletion / MISMATCH_SCORE_LIMIT) * 100;
   const spreadScoreCompletion = Math.max(
     0,
-    Math.min(GOAL_SCORE_LIMIT, GOAL_SCORE_LIMIT - report.overallNetSpread)
+    Math.min(
+      TEAM_ADVANTAGE_SCORE_LIMIT,
+      TEAM_ADVANTAGE_SCORE_LIMIT - report.overallNetSpread
+    )
   );
-  const spreadScoreWidth = (spreadScoreCompletion / GOAL_SCORE_LIMIT) * 100;
+  const spreadScoreWidth = (spreadScoreCompletion / TEAM_ADVANTAGE_SCORE_LIMIT) * 100;
 
   return (
     <div className="scenario-matchup-optimization">
@@ -4660,6 +4729,7 @@ function OptimizationResultsCard({
         <p className="scenario-matchup-optimization-subtext">
           A pair is fair when its matchup score is within +/-0.3
         </p>
+        <p className="scenario-matchup-overall-helper">{goal1SwapHelperText}</p>
       </div>
 
       <div className="scenario-matchup-optimization-section">
@@ -4667,7 +4737,7 @@ function OptimizationResultsCard({
         <div
           className="scenario-matchup-optimization-bar"
           role="img"
-          aria-label={`Total mismatch score ${report.totalUnfairnessMagnitude.toFixed(2)} on a 0 to 10 scale`}
+          aria-label={`Total mismatch score ${report.totalUnfairnessMagnitude.toFixed(2)} on a 0 to 25 scale`}
         >
           <div
             className="scenario-matchup-optimization-bar-segment fair"
@@ -4684,6 +4754,7 @@ function OptimizationResultsCard({
         <p className="scenario-matchup-optimization-subtext">
           This is total mismatch score across player pairs.
         </p>
+        <p className="scenario-matchup-overall-helper">{goal2SwapHelperText}</p>
       </div>
 
       <div className="scenario-matchup-optimization-section">
@@ -4708,11 +4779,7 @@ function OptimizationResultsCard({
         <p className="scenario-matchup-optimization-subtext">
           This is the overall spread between teams.
         </p>
-      </div>
-
-      <div className="scenario-matchup-optimization-section scenario-matchup-optimization-suggestion">
-        <h3 className="scenario-matchup-optimization-heading">Suggested Swap</h3>
-        <p className="scenario-matchup-overall-helper">{helperText}</p>
+        <p className="scenario-matchup-overall-helper">{goal3SwapHelperText}</p>
       </div>
     </div>
   );
@@ -4860,15 +4927,15 @@ function HeadToHeadMatchupCard({
       <div className="scenario-head-to-head-title">
         <div className="scenario-head-to-head-heading">Head to Head</div>
       </div>
-      <div className="scenario-head-to-head-columns">
-        <div className="scenario-head-to-head-column-label">
-          {abbreviateVisualizerName(resolvedMatchup.offenseTeamLabel)} OFFENSE
+        <div className="scenario-head-to-head-columns">
+          <div className="scenario-head-to-head-column-label">
+          {resolvedMatchup.offenseTeamLabel} OFFENSE
+          </div>
+          <div />
+          <div className="scenario-head-to-head-column-label defense">
+          {resolvedMatchup.defenseTeamLabel} DEFENSE
+          </div>
         </div>
-        <div />
-        <div className="scenario-head-to-head-column-label defense">
-          {abbreviateVisualizerName(resolvedMatchup.defenseTeamLabel)} DEFENSE
-        </div>
-      </div>
       <div className="scenario-head-to-head-rows">
         {resolvedMatchup.rows.map((row, index) => (
           <div key={`${row.offensePlayerId}:${row.defensePlayerId}:${index}`} className="scenario-head-to-head-row">
@@ -4981,7 +5048,7 @@ function OverallMatchupBarChart({
             return (
               <div key={team.id} className="scenario-matchup-overall-row">
                 <div className="scenario-matchup-overall-label">
-                  {abbreviateVisualizerName(getTeamDisplayName(team, index))}
+                  {getTeamDisplayName(team, index)}
                 </div>
                 <div className="scenario-matchup-overall-metrics">
                     {metrics.map((metric) => {
@@ -5287,7 +5354,7 @@ function TeamMatchupChordDiagram({
                 dominantBaseline="middle"
                 className={`scenario-matchup-chord-label${isFocused ? " active" : ""}${selectedTeamId === group.team.id ? " pinned" : ""}${isDimmed ? " inactive" : ""}`}
               >
-                {abbreviateVisualizerName(getTeamDisplayName(group.team, index))}
+                {getTeamDisplayName(group.team, index)}
               </text>
             </g>
           );
