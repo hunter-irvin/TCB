@@ -1960,6 +1960,11 @@ select {
   gap: 10px;
 }
 
+.scenario-stats-combined {
+  display: grid;
+  gap: 12px;
+}
+
 .scenario-analytics-tabs {
   display: inline-flex;
   gap: 8px;
@@ -2200,6 +2205,227 @@ select {
   gap: 8px;
 }
 
+.scenario-stats-v2 {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.95fr) minmax(0, 1.85fr);
+  gap: 8px;
+  align-items: stretch;
+}
+
+.scenario-stats-v2-card {
+  min-height: 318px;
+  height: 100%;
+}
+
+.scenario-stats-v2-placeholder {
+  display: grid;
+  place-items: center;
+  min-height: 252px;
+  padding: 18px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.scenario-stats-v2-table-wrap {
+  position: relative;
+  padding: 4px 8px 8px;
+  overflow: hidden;
+}
+
+.scenario-stats-v2-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.scenario-stats-v2-col-team {
+  width: auto;
+}
+
+.scenario-stats-v2-table thead th {
+  padding: 0 15px 6px;
+  color: rgba(248, 250, 252, 0.9);
+  font-size: 0.69rem;
+  font-weight: 800;
+  line-height: 1.25;
+  text-align: center;
+  vertical-align: bottom;
+  white-space: nowrap;
+}
+
+.scenario-stats-v2-table thead th:first-child {
+  text-align: left;
+}
+
+.scenario-stats-v2-table tbody th,
+.scenario-stats-v2-table tbody td {
+  padding: 5px 15px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.scenario-stats-v2-overall-row th,
+.scenario-stats-v2-overall-row td {
+  border-top: 1px solid rgba(250, 204, 21, 0.26);
+}
+
+.scenario-stats-v2-group-label {
+  color: rgba(248, 250, 252, 0.7);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-align: center;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+
+.scenario-stats-v2-table tbody th {
+  color: #f8fafc;
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1.15;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.scenario-stats-v2-overall-label {
+  color: #facc15;
+}
+
+.scenario-stats-v2-overall-gold {
+  color: #facc15 !important;
+}
+
+.scenario-stats-v2-cell {
+  vertical-align: middle;
+}
+
+.scenario-stats-v2-team-cell {
+  position: relative;
+}
+
+.scenario-stats-v2-missing {
+  padding-left: 15px;
+  padding-right: 15px;
+  text-align: center;
+}
+
+.scenario-stats-v2-missing .scenario-chart-helper {
+  display: block;
+  padding: 2px 0;
+}
+
+.scenario-stats-v2-incomplete-overlay {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  z-index: 4;
+  text-align: center;
+}
+
+.scenario-stats-v2-incomplete-overlay .scenario-chart-helper {
+  padding: 0 8px;
+}
+
+.scenario-stats-v2-team-cell::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: #ffffff;
+  transform: translateX(-0.5px);
+  z-index: 2;
+  pointer-events: none;
+}
+
+.scenario-stats-v2-team-cell-incomplete::before {
+  content: none;
+}
+
+.scenario-stats-v2-cell-inner {
+  display: grid;
+}
+
+.scenario-stats-v2-value {
+  font-size: 0.76rem;
+  font-weight: 800;
+  text-align: center;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.scenario-stats-v2-value.positive {
+  color: #9be39f;
+}
+
+.scenario-stats-v2-value.negative {
+  color: #f4a3a3;
+}
+
+.scenario-stats-v2-value.neutral {
+  color: rgba(248, 250, 252, 0.86);
+}
+
+.scenario-stats-v2-value.summary {
+  color: #facc15;
+}
+
+.scenario-stats-v2-value-marker.summary {
+  z-index: 3;
+}
+
+.scenario-stats-v2-value-marker.summary.positive {
+  transform: translate(-100%, -50%);
+}
+
+.scenario-stats-v2-value-marker.summary.negative {
+  transform: translateY(-50%);
+}
+
+.scenario-stats-v2-track {
+  position: relative;
+  min-height: 14px;
+  overflow: hidden;
+}
+
+.scenario-stats-v2-value-marker {
+  position: absolute;
+  top: 50%;
+  white-space: nowrap;
+  z-index: 3;
+}
+
+.scenario-stats-v2-value-marker.positive {
+  transform: translate(-100%, -50%);
+}
+
+.scenario-stats-v2-value-marker.negative {
+  transform: translateY(-50%);
+}
+
+.scenario-stats-v2-value-marker.neutral {
+  transform: translate(-50%, -50%);
+}
+
+.scenario-stats-v2-bar {
+  position: absolute;
+  top: 2px;
+  height: 10px;
+  border-radius: 999px;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.14),
+    0 4px 10px rgba(0, 0, 0, 0.16);
+  z-index: 1;
+}
+
+.scenario-stats-v2-bar.summary {
+  background: #facc15 !important;
+}
+
 .scenario-matchup-card {
   min-height: 318px;
 }
@@ -2308,22 +2534,26 @@ select {
 
 .scenario-matchup-overall-row {
   display: grid;
-  grid-template-columns: 120px minmax(0, 1fr);
-  gap: 8px;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 10px;
   align-items: center;
 }
 
 .scenario-matchup-overall-label {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
+  display: grid;
+  align-content: center;
+  justify-items: start;
   min-height: 100%;
-  font-size: 0.76rem;
+  font-size: 0.78rem;
   font-weight: 800;
   color: #f8fafc;
-  text-align: right;
-  line-height: 1.15;
-  word-break: break-word;
+  text-align: left;
+  line-height: 1.05;
+  word-break: normal;
+}
+
+.scenario-matchup-overall-label span {
+  display: block;
 }
 
 .scenario-matchup-overall-metrics {
@@ -2428,7 +2658,7 @@ select {
 
 .scenario-matchup-chord-label {
   fill: var(--text);
-  font-size: 0.6rem;
+  font-size: 0.72rem;
   font-weight: 800;
   letter-spacing: 0.01em;
 }
@@ -4030,8 +4260,12 @@ select {
     width: 100%;
   }
 
+  .scenario-stats-v2 {
+    grid-template-columns: 1fr;
+  }
+
   .scenario-matchup-overall-row {
-    grid-template-columns: 60px minmax(0, 1fr);
+    grid-template-columns: 52px minmax(0, 1fr);
   }
 
   .scenario-matchup-overall-metric {
