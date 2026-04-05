@@ -106,14 +106,15 @@ type ScenarioReorderState = {
 
 type ScenarioActionState = {
   scenarioId: string;
-  mode: "randomize" | "balanceOverall" | "balanceCategories" | "balanceMatchup";
+  mode: "randomize" | "balanceStats" | "balanceMatchup";
 };
 
 type ScenarioActionSummary = {
   generatedCount: number;
-  mode: "randomize" | "balanceOverall" | "balanceCategories" | "balanceMatchup";
+  mode: "randomize" | "balanceStats" | "balanceMatchup";
   candidates: Assignments[];
   currentIndex: number;
+  balanceSummaryText?: string | null;
 };
 
 type TeamBalanceTotals = {
@@ -122,10 +123,11 @@ type TeamBalanceTotals = {
   misc: number;
 };
 
-type BalanceSelectionMode = "overall" | "categories";
 type ScenarioActionMode = ScenarioActionState["mode"];
 type ScenarioAnalyticsMode = "stats" | "matchup";
 type ScenarioGoalLabel = "Goal 1" | "Goal 2" | "Goal 3";
+type StatsBalanceLeafKey = Exclude<ScenarioCategoryAdvantageKey, "overall">;
+type StatsBalanceStrategy = "overall" | "selected";
 type HeadToHeadSelection = {
   perspective: "offense" | "defense";
   sourceTeamId: string;
@@ -141,6 +143,19 @@ type ScenarioHistoryEntry = {
   teams: Team[];
   assignments: Assignments;
   summary: ScenarioActionSummary | null;
+};
+
+type ScenarioHistoryStacks = Record<string, ScenarioHistoryEntry[]>;
+
+type ChipTravelSnapshot = {
+  clone: HTMLDivElement;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  background: string;
+  borderRadius: string;
+  color: string;
 };
 
 type ScenarioGenerationResult = {
@@ -260,6 +275,25 @@ const SCENARIO_SUBCATEGORY_ATTRIBUTES = PLAYER_ATTRIBUTE_GROUPS.reduce<
   allAttributes.push(...group.attributes);
   return allAttributes;
 }, []);
+const SCENARIO_STATS_BALANCE_FILTER_GROUPS: Array<{
+  key: string;
+  label: string;
+  options: Array<{ key: StatsBalanceLeafKey; label: string }>;
+}> = [
+  ...PLAYER_ATTRIBUTE_GROUPS.map((group) => ({
+    key: group.tone,
+    label: group.label,
+    options: group.attributes
+  })),
+  {
+    key: "chemistry",
+    label: "Chemistry",
+    options: [{ key: "chemistry", label: "Chemistry" }]
+  }
+];
+const SCENARIO_STATS_BALANCE_LEAF_KEYS = SCENARIO_STATS_BALANCE_FILTER_GROUPS.flatMap((group) =>
+  group.options.map((option) => option.key)
+);
 const SCENARIO_STATS_V2_GROUPS: Array<{
   shortLabel: "OFF" | "DEF" | "MISC" | "CHEM";
   rows: Array<{ key: ScenarioCategoryAdvantageKey; label: string }>;
@@ -284,6 +318,70 @@ const SCENARIO_STATS_V2_GROUPS: Array<{
 
 function roundChartValue(value: number) {
   return Math.round((value + Number.EPSILON) * 10) / 10;
+}
+
+function normalizeStatsBalanceSelection(selection: StatsBalanceLeafKey[]) {
+  const validKeys = new Set<StatsBalanceLeafKey>(SCENARIO_STATS_BALANCE_LEAF_KEYS);
+  return [...new Set(selection.filter((key): key is StatsBalanceLeafKey => validKeys.has(key)))];
+}
+
+function getDefaultStatsBalanceSelection() {
+  return [...SCENARIO_STATS_BALANCE_LEAF_KEYS];
+}
+
+function areStatsBalanceSelectionsEqual(
+  left: StatsBalanceLeafKey[],
+  right: StatsBalanceLeafKey[]
+) {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  const leftSet = new Set(left);
+  return right.every((key) => leftSet.has(key));
+}
+
+function areAllStatsBalanceOptionsSelected(selection: StatsBalanceLeafKey[]) {
+  return areStatsBalanceSelectionsEqual(
+    normalizeStatsBalanceSelection(selection),
+    getDefaultStatsBalanceSelection()
+  );
+}
+
+function formatListWithAnd(items: string[]) {
+  if (items.length === 0) {
+    return "";
+  }
+
+  if (items.length === 1) {
+    return items[0];
+  }
+
+  if (items.length === 2) {
+    return `${items[0]} and ${items[1]}`;
+  }
+
+  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+}
+
+function buildStatsBalanceSummaryText(selection: StatsBalanceLeafKey[]) {
+  const normalizedSelection = normalizeStatsBalanceSelection(selection);
+
+  if (areAllStatsBalanceOptionsSelected(normalizedSelection)) {
+    return "overall";
+  }
+
+  const labels = SCENARIO_STATS_BALANCE_FILTER_GROUPS.flatMap((group) =>
+    group.options
+      .filter((option) => normalizedSelection.includes(option.key))
+      .map((option) => option.label)
+  );
+
+  return labels.length > 0 ? formatListWithAnd(labels) : "selected stats";
+}
+
+function getStatsBalanceStrategy(selection: StatsBalanceLeafKey[]): StatsBalanceStrategy {
+  return areAllStatsBalanceOptionsSelected(selection) ? "overall" : "selected";
 }
 
 function formatChartValue(value: number) {
@@ -347,7 +445,7 @@ function createScenario(index: number, runSlug: string, teams: Team[] = createDe
     title: `Team Scenario ${index}`,
     teams: cloneTeams(teams),
     assignments: createEmptyAssignments(teams),
-    collapsed: false
+    collapsed: true
   };
 }
 
@@ -906,8 +1004,117 @@ function cloneScenarioActionSummary(summary: ScenarioActionSummary | null) {
 
   return {
     ...summary,
-    candidates: cloneScenarioCandidates(summary.candidates)
+    candidates: cloneScenarioCandidates(summary.candidates),
+    balanceSummaryText: summary.balanceSummaryText ?? null
   };
+}
+
+function createScenarioHistoryEntry(
+  scenario: Scenario,
+  summary: ScenarioActionSummary | null
+): ScenarioHistoryEntry {
+  return {
+    teams: cloneTeams(scenario.teams),
+    assignments: cloneAssignments(scenario.assignments),
+    summary: cloneScenarioActionSummary(summary)
+  };
+}
+
+function appendScenarioHistoryEntry(
+  stacks: ScenarioHistoryStacks,
+  scenarioId: string,
+  entry: ScenarioHistoryEntry
+): ScenarioHistoryStacks {
+  const existingEntries = stacks[scenarioId] ?? [];
+  const previousEntry = existingEntries[existingEntries.length - 1] ?? null;
+
+  if (
+    previousEntry &&
+    areTeamsEqual(previousEntry.teams, entry.teams) &&
+    areAssignmentsEqual(previousEntry.assignments, entry.assignments) &&
+    areScenarioActionSummariesEqual(previousEntry.summary, entry.summary)
+  ) {
+    return stacks;
+  }
+
+  return {
+    ...stacks,
+    [scenarioId]: [...existingEntries, entry].slice(-MAX_SCENARIO_UNDO_STEPS)
+  };
+}
+
+function getAssignedPlayerIds(assignments: Assignments) {
+  const playerIds = new Set<number>();
+
+  for (const slots of Object.values(assignments)) {
+    for (const playerId of Object.values(slots)) {
+      if (playerId !== null) {
+        playerIds.add(playerId);
+      }
+    }
+  }
+
+  return playerIds;
+}
+
+function areScenarioSlotsEqual(left: SlotDescriptor | null, right: SlotDescriptor | null) {
+  if (!left || !right) {
+    return left === right;
+  }
+
+  return left.teamId === right.teamId && left.position === right.position;
+}
+
+function captureChipTravelSnapshot(node: HTMLDivElement): ChipTravelSnapshot {
+  const rect = node.getBoundingClientRect();
+  const clone = node.cloneNode(true) as HTMLDivElement;
+  const styles = getComputedStyle(node);
+
+  clone.classList.add("chip-swap-travel");
+
+  return {
+    clone,
+    left: rect.left,
+    top: rect.top,
+    width: rect.width,
+    height: rect.height,
+    background: styles.backgroundColor,
+    borderRadius: styles.borderRadius,
+    color: styles.color
+  };
+}
+
+function animateChipTravelSnapshot(snapshot: ChipTravelSnapshot, toNode: HTMLDivElement) {
+  const toRect = toNode.getBoundingClientRect();
+  const clone = snapshot.clone;
+
+  clone.style.width = `${snapshot.width}px`;
+  clone.style.height = `${snapshot.height}px`;
+  clone.style.left = `${snapshot.left}px`;
+  clone.style.top = `${snapshot.top}px`;
+  clone.style.background = snapshot.background;
+  clone.style.borderRadius = snapshot.borderRadius;
+  clone.style.color = snapshot.color;
+  document.body.appendChild(clone);
+
+  const deltaX = toRect.left - snapshot.left;
+  const deltaY = toRect.top - snapshot.top;
+  const animation = clone.animate(
+    [
+      { transform: "translate3d(0, 0, 0) scale(1)", opacity: 1 },
+      { transform: `translate3d(${deltaX}px, ${deltaY}px, 0) scale(0.98)`, opacity: 1 }
+    ],
+    {
+      duration: 320,
+      easing: "cubic-bezier(0.2, 0.8, 0.2, 1)"
+    }
+  );
+
+  animation.onfinish = () => clone.remove();
+}
+
+function getAvailableChipKey(scenarioId: string, playerId: number) {
+  return `${scenarioId}:${playerId}`;
 }
 
 function areScenarioActionSummariesEqual(
@@ -922,7 +1129,8 @@ function areScenarioActionSummariesEqual(
     left.generatedCount !== right.generatedCount ||
     left.mode !== right.mode ||
     left.currentIndex !== right.currentIndex ||
-    left.candidates.length !== right.candidates.length
+    left.candidates.length !== right.candidates.length ||
+    (left.balanceSummaryText ?? null) !== (right.balanceSummaryText ?? null)
   ) {
     return false;
   }
@@ -982,13 +1190,14 @@ function countFilledAssignments(assignments: Assignments) {
 function buildGeneratedScenarioCandidate(
   assignments: Assignments,
   playersById: ReadonlyMap<number, Player>,
-  teams: Team[]
+  teams: Team[],
+  selection: StatsBalanceLeafKey[]
 ): GeneratedScenarioCandidate {
   return {
     assignments: cloneAssignments(assignments),
     signature: getScenarioAssignmentsSignature(assignments),
     filledCount: countFilledAssignments(assignments),
-    categoryScore: getScenarioBalanceScore(assignments, playersById, teams),
+    categoryScore: getScenarioSelectedBalanceScore(assignments, playersById, teams, selection),
     overallRangeScore: getScenarioOverallRangeScore(assignments, playersById, teams),
     overallScore: getScenarioOverallBalanceScore(assignments, playersById, teams)
   };
@@ -1062,7 +1271,8 @@ function chooseBestRandomizedAssignments(
     buildGeneratedScenarioCandidate(
       randomizeRemainingAssignments(assignments, teams, availablePlayers),
       playersById,
-      teams
+      teams,
+      getDefaultStatsBalanceSelection()
     )
   );
   const bestFilledCount = generatedCandidates.reduce(
@@ -1163,6 +1373,32 @@ function getScenarioBalanceScore(
   );
 }
 
+function getScenarioSelectedBalanceScore(
+  assignments: Assignments,
+  playersById: ReadonlyMap<number, Player>,
+  teams: Team[],
+  selection: StatsBalanceLeafKey[]
+) {
+  const normalizedSelection = normalizeStatsBalanceSelection(selection);
+  if (normalizedSelection.length === 0) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const attributeTotals = buildScenarioTeamAttributeTotals(assignments, playersById, teams);
+  const chemistryTotals = teams.map((team) =>
+    buildTeamChemistryBonusTotal(assignments, playersById, team.id)
+  );
+
+  return normalizedSelection.reduce((sum, key) => {
+    const values =
+      key === "chemistry"
+        ? chemistryTotals
+        : attributeTotals.map((teamTotals) => teamTotals[key] ?? 0);
+
+    return sum + getPairwiseDifferenceSum(values);
+  }, 0);
+}
+
 function getScenarioOverallBalanceScore(
   assignments: Assignments,
   playersById: ReadonlyMap<number, Player>,
@@ -1187,9 +1423,9 @@ function getScenarioOverallRangeScore(
 
 function sortBalancedCandidates(
   candidates: GeneratedScenarioCandidate[],
-  mode: BalanceSelectionMode
+  strategy: StatsBalanceStrategy
 ) {
-  if (mode === "overall") {
+  if (strategy === "overall") {
     const sortedByRange = candidates
       .slice()
       .sort((left, right) => {
@@ -1261,7 +1497,7 @@ function chooseBestBalancedAssignments(
   availablePlayers: Player[],
   playersById: ReadonlyMap<number, Player>,
   batchAttempts: number,
-  mode: BalanceSelectionMode
+  selection: StatsBalanceLeafKey[]
 ): ScenarioGenerationResult {
   if (availablePlayers.length === 0) {
     return {
@@ -1276,6 +1512,7 @@ function chooseBestBalancedAssignments(
   let fullRosterCount = 0;
   const fullCandidates: GeneratedScenarioCandidate[] = [];
   const partialCandidates: GeneratedScenarioCandidate[] = [];
+  const strategy = getStatsBalanceStrategy(selection);
 
   while (
     totalAttempts < BALANCED_ASSIGNMENT_MAX_ATTEMPTS &&
@@ -1290,7 +1527,8 @@ function chooseBestBalancedAssignments(
       const nextCandidate = buildGeneratedScenarioCandidate(
         randomizeRemainingAssignments(assignments, teams, availablePlayers),
         playersById,
-        teams
+        teams,
+        selection
       );
 
       if (nextCandidate.filledCount === totalSlotCount) {
@@ -1307,7 +1545,7 @@ function chooseBestBalancedAssignments(
 
   const orderedFullCandidates = sortBalancedCandidates(
     dedupeGeneratedCandidates(fullCandidates),
-    mode
+    strategy
   );
 
   if (orderedFullCandidates.length > 0) {
@@ -1316,7 +1554,7 @@ function chooseBestBalancedAssignments(
 
   return buildScenarioGenerationResult(
     totalAttempts,
-    sortBalancedCandidates(dedupeGeneratedCandidates(partialCandidates), mode),
+    sortBalancedCandidates(dedupeGeneratedCandidates(partialCandidates), strategy),
     assignments
   );
 }
@@ -1778,7 +2016,9 @@ function TeamsContent() {
   const cellRefs = useRef(new Map<string, HTMLDivElement>());
   const wrapRefs = useRef(new Map<string, HTMLDivElement>());
   const chipRefs = useRef(new Map<string, HTMLDivElement>());
+  const availableChipRefs = useRef(new Map<string, HTMLDivElement>());
   const poolRefs = useRef(new Map<string, HTMLDivElement>());
+  const statsBalanceFilterRefs = useRef(new Map<string, HTMLDivElement>());
   const scenarioCardRefs = useRef(new Map<string, HTMLElement>());
   const scenarioRectsRef = useRef(new Map<string, DOMRect>());
   const previewTargetRef = useRef<ScenarioSlot | null>(null);
@@ -1837,8 +2077,9 @@ function TeamsContent() {
   >({});
   const scenarioActionSummariesRef = useRef<Record<string, ScenarioActionSummary | null>>({});
   const [scenarioUndoStacks, setScenarioUndoStacks] = useState<
-    Record<string, ScenarioHistoryEntry[]>
+    ScenarioHistoryStacks
   >({});
+  const [scenarioRedoStacks, setScenarioRedoStacks] = useState<ScenarioHistoryStacks>({});
   const [nearestSlot, setNearestSlot] = useState<NearestSlot>(null);
   const [animatedSlots, setAnimatedSlots] = useState<string[]>([]);
   const [dragState, setDragState] = useState<DragState | null>(null);
@@ -1859,6 +2100,16 @@ function TeamsContent() {
   const [analyticsModeByScenario, setAnalyticsModeByScenario] = useState<
     Record<string, ScenarioAnalyticsMode>
   >({});
+  const [statsBalanceSelectionByScenario, setStatsBalanceSelectionByScenario] = useState<
+    Record<string, StatsBalanceLeafKey[]>
+  >(() =>
+    Object.fromEntries(
+      initialScenarios.map((scenario) => [scenario.id, getDefaultStatsBalanceSelection()])
+    )
+  );
+  const [openStatsBalanceFilterScenarioId, setOpenStatsBalanceFilterScenarioId] = useState<string | null>(
+    null
+  );
 
   const playerById = useMemo(
     () => new Map(players.map((player) => [player.id, player])),
@@ -1987,6 +2238,16 @@ function TeamsContent() {
         : Object.fromEntries(nextEntries);
     });
 
+    setScenarioRedoStacks((current) => {
+      const nextEntries = Object.entries(current).filter(([scenarioId]) =>
+        validScenarioIds.has(scenarioId)
+      );
+
+      return nextEntries.length === Object.keys(current).length
+        ? current
+        : Object.fromEntries(nextEntries);
+    });
+
     setAnalyticsModeByScenario((current) => {
       const nextEntries = Object.entries(current).filter(([scenarioId]) =>
         validScenarioIds.has(scenarioId)
@@ -1996,7 +2257,57 @@ function TeamsContent() {
         ? current
         : Object.fromEntries(nextEntries);
     });
+
+    setStatsBalanceSelectionByScenario((current) => {
+      let didChange = false;
+      const nextEntries = scenarios.map((scenario) => {
+        const existingSelection = current[scenario.id];
+        const nextSelection = existingSelection
+          ? normalizeStatsBalanceSelection(existingSelection)
+          : getDefaultStatsBalanceSelection();
+
+        if (
+          !existingSelection ||
+          !areStatsBalanceSelectionsEqual(existingSelection, nextSelection)
+        ) {
+          didChange = true;
+        }
+
+        return [scenario.id, nextSelection] as const;
+      });
+
+      if (!didChange && nextEntries.length === Object.keys(current).length) {
+        return current;
+      }
+
+      return Object.fromEntries(nextEntries);
+    });
   }, [scenarios]);
+
+  useEffect(() => {
+    if (
+      openStatsBalanceFilterScenarioId &&
+      !scenarios.some((scenario) => scenario.id === openStatsBalanceFilterScenarioId)
+    ) {
+      setOpenStatsBalanceFilterScenarioId(null);
+    }
+  }, [openStatsBalanceFilterScenarioId, scenarios]);
+
+  useEffect(() => {
+    if (!openStatsBalanceFilterScenarioId) {
+      return;
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const container = statsBalanceFilterRefs.current.get(openStatsBalanceFilterScenarioId);
+      if (container && event.target instanceof Node && !container.contains(event.target)) {
+        setOpenStatsBalanceFilterScenarioId(null);
+      }
+    };
+
+    window.addEventListener("mousedown", handlePointerDown);
+    return () => window.removeEventListener("mousedown", handlePointerDown);
+  }, [openStatsBalanceFilterScenarioId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2119,7 +2430,7 @@ function TeamsContent() {
       storedState?.scenarios.length
         ? normalizeScenarioIds(storedState.scenarios).map((scenario) => ({
             ...scenario,
-            collapsed: scenario.collapsed ?? false
+            collapsed: scenario.collapsed ?? true
           }))
         : [];
 
@@ -2938,6 +3249,15 @@ function TeamsContent() {
           return currentScenarios;
         }
 
+        setScenarioRedoStacks((current) => {
+          if (!(scenarioId in current)) {
+            return current;
+          }
+
+          const next = { ...current };
+          delete next[scenarioId];
+          return next;
+        });
         queueScenarioTeamsSync(nextScenarios, [scenarioId], options);
         queueScenarioAssignmentsSync(nextScenarios, [scenarioId], options);
         return nextScenarios;
@@ -3198,37 +3518,96 @@ function TeamsContent() {
     []
   );
 
-  const pushScenarioUndoSnapshot = useCallback((scenarioId: string) => {
+  const getCurrentScenarioHistoryEntry = useCallback((scenarioId: string) => {
     const scenario = latestScenariosRef.current.find((candidate) => candidate.id === scenarioId);
-    if (!scenario) {
+    return scenario
+      ? createScenarioHistoryEntry(scenario, scenarioActionSummariesRef.current[scenarioId] ?? null)
+      : null;
+  }, []);
+
+  const pushScenarioUndoSnapshot = useCallback((scenarioId: string) => {
+    const nextEntry = getCurrentScenarioHistoryEntry(scenarioId);
+    if (!nextEntry) {
       return;
     }
 
-    const nextEntry: ScenarioHistoryEntry = {
-      teams: cloneTeams(scenario.teams),
-      assignments: cloneAssignments(scenario.assignments),
-      summary: cloneScenarioActionSummary(scenarioActionSummariesRef.current[scenarioId] ?? null)
-    };
-
-    setScenarioUndoStacks((current) => {
-      const existingEntries = current[scenarioId] ?? [];
-      const previousEntry = existingEntries[existingEntries.length - 1] ?? null;
-
-      if (
-        previousEntry &&
-        areTeamsEqual(previousEntry.teams, nextEntry.teams) &&
-        areAssignmentsEqual(previousEntry.assignments, nextEntry.assignments) &&
-        areScenarioActionSummariesEqual(previousEntry.summary, nextEntry.summary)
-      ) {
+    setScenarioUndoStacks((current) => appendScenarioHistoryEntry(current, scenarioId, nextEntry));
+    setScenarioRedoStacks((current) => {
+      if (!(scenarioId in current)) {
         return current;
       }
 
-      return {
-        ...current,
-        [scenarioId]: [...existingEntries, nextEntry].slice(-MAX_SCENARIO_UNDO_STEPS)
-      };
+      const next = { ...current };
+      delete next[scenarioId];
+      return next;
     });
-  }, []);
+  }, [getCurrentScenarioHistoryEntry]);
+
+  const animateScenarioHistoryRestore = useCallback(
+    (scenarioId: string, fromAssignments: Assignments, toAssignments: Assignments) => {
+      const changedPlayerIds = new Set<number>([
+        ...getAssignedPlayerIds(fromAssignments),
+        ...getAssignedPlayerIds(toAssignments)
+      ]);
+      const travelSnapshots = new Map<number, ChipTravelSnapshot>();
+      const changedSlotKeys = new Set<string>();
+
+      changedPlayerIds.forEach((playerId) => {
+        const fromSlot = findPlayerSlot(fromAssignments, playerId);
+        const toSlot = findPlayerSlot(toAssignments, playerId);
+
+        if (areScenarioSlotsEqual(fromSlot, toSlot)) {
+          return;
+        }
+
+        if (fromSlot) {
+          changedSlotKeys.add(getScenarioSlotKey(scenarioId, fromSlot));
+        }
+
+        if (toSlot) {
+          changedSlotKeys.add(getScenarioSlotKey(scenarioId, toSlot));
+        }
+
+        const originNode = fromSlot
+          ? chipRefs.current.get(getScenarioSlotKey(scenarioId, fromSlot))
+          : availableChipRefs.current.get(getAvailableChipKey(scenarioId, playerId));
+
+        if (originNode) {
+          travelSnapshots.set(playerId, captureChipTravelSnapshot(originNode));
+        }
+      });
+
+      if (changedSlotKeys.size > 0) {
+        setAnimatedSlots([...changedSlotKeys]);
+        window.setTimeout(() => setAnimatedSlots([]), 220);
+      }
+
+      if (travelSnapshots.size === 0) {
+        return;
+      }
+
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          changedPlayerIds.forEach((playerId) => {
+            const snapshot = travelSnapshots.get(playerId);
+            if (!snapshot) {
+              return;
+            }
+
+            const destinationSlot = findPlayerSlot(toAssignments, playerId);
+            const destinationNode = destinationSlot
+              ? chipRefs.current.get(getScenarioSlotKey(scenarioId, destinationSlot))
+              : availableChipRefs.current.get(getAvailableChipKey(scenarioId, playerId));
+
+            if (destinationNode) {
+              animateChipTravelSnapshot(snapshot, destinationNode);
+            }
+          });
+        });
+      });
+    },
+    []
+  );
 
   const applyScenarioAssignmentsChange = useCallback(
     (
@@ -3265,7 +3644,11 @@ function TeamsContent() {
   );
 
   const restoreScenarioHistoryEntry = useCallback(
-    (scenarioId: string, entry: ScenarioHistoryEntry) => {
+    (
+      scenarioId: string,
+      entry: ScenarioHistoryEntry,
+      options?: { animateFromAssignments?: Assignments | null }
+    ) => {
       setOpenPickerSlot((current) => (current?.scenarioId === scenarioId ? null : current));
       setSelectedAvailablePlayer((current) => (current?.scenarioId === scenarioId ? null : current));
       setScenarioActionSummary(scenarioId, entry.summary);
@@ -3283,13 +3666,27 @@ function TeamsContent() {
         queueScenarioAssignmentsSync(nextScenarios, [scenarioId], { immediate: true });
         return nextScenarios;
       });
+
+      if (options?.animateFromAssignments) {
+        animateScenarioHistoryRestore(
+          scenarioId,
+          cloneAssignments(options.animateFromAssignments),
+          cloneAssignments(entry.assignments)
+        );
+      }
     },
-    [queueScenarioAssignmentsSync, queueScenarioTeamsSync, setScenarioActionSummary]
+    [
+      animateScenarioHistoryRestore,
+      queueScenarioAssignmentsSync,
+      queueScenarioTeamsSync,
+      setScenarioActionSummary
+    ]
   );
 
   const undoScenarioAssignments = useCallback(
     (scenarioId: string) => {
       let entryToRestore: ScenarioHistoryEntry | null = null;
+      const currentEntry = getCurrentScenarioHistoryEntry(scenarioId);
 
       setScenarioUndoStacks((current) => {
         const existingEntries = current[scenarioId] ?? [];
@@ -3304,13 +3701,46 @@ function TeamsContent() {
         };
       });
 
-      if (!entryToRestore) {
+      if (!entryToRestore || !currentEntry) {
         return;
       }
 
-      restoreScenarioHistoryEntry(scenarioId, entryToRestore);
+      setScenarioRedoStacks((current) => appendScenarioHistoryEntry(current, scenarioId, currentEntry));
+      restoreScenarioHistoryEntry(scenarioId, entryToRestore, {
+        animateFromAssignments: currentEntry.assignments
+      });
     },
-    [restoreScenarioHistoryEntry]
+    [getCurrentScenarioHistoryEntry, restoreScenarioHistoryEntry]
+  );
+
+  const redoScenarioAssignments = useCallback(
+    (scenarioId: string) => {
+      let entryToRestore: ScenarioHistoryEntry | null = null;
+      const currentEntry = getCurrentScenarioHistoryEntry(scenarioId);
+
+      setScenarioRedoStacks((current) => {
+        const existingEntries = current[scenarioId] ?? [];
+        if (existingEntries.length === 0) {
+          return current;
+        }
+
+        entryToRestore = existingEntries[existingEntries.length - 1] ?? null;
+        return {
+          ...current,
+          [scenarioId]: existingEntries.slice(0, -1)
+        };
+      });
+
+      if (!entryToRestore || !currentEntry) {
+        return;
+      }
+
+      setScenarioUndoStacks((current) => appendScenarioHistoryEntry(current, scenarioId, currentEntry));
+      restoreScenarioHistoryEntry(scenarioId, entryToRestore, {
+        animateFromAssignments: currentEntry.assignments
+      });
+    },
+    [getCurrentScenarioHistoryEntry, restoreScenarioHistoryEntry]
   );
 
   const beginScenarioAction = useCallback(
@@ -3318,12 +3748,14 @@ function TeamsContent() {
       scenarioId: string,
       mode: ScenarioActionMode,
       computeResult: () => ScenarioGenerationResult,
-      onComplete?: (result: ScenarioGenerationResult) => void
+      onComplete?: (result: ScenarioGenerationResult) => void,
+      summaryOptions?: { balanceSummaryText?: string | null }
     ) => {
       setScenarioActionState({
         scenarioId,
         mode
       });
+      setOpenStatsBalanceFilterScenarioId(null);
       setOpenPickerSlot(null);
       setSelectedAvailablePlayer((current) => (current?.scenarioId === scenarioId ? null : current));
 
@@ -3339,7 +3771,8 @@ function TeamsContent() {
               generatedCount: result.generatedCount,
               mode,
               candidates: result.candidates,
-              currentIndex: 0
+              currentIndex: 0,
+              balanceSummaryText: summaryOptions?.balanceSummaryText ?? null
             }
           });
           onComplete?.(result);
@@ -3367,16 +3800,15 @@ function TeamsContent() {
   };
 
   const toggleScenarioCollapsed = (scenarioId: string) => {
-    setScenarios((current) =>
-      current.map((scenario) =>
-        scenario.id === scenarioId
-          ? {
-              ...scenario,
-              collapsed: !scenario.collapsed
-            }
-          : scenario
-      )
-    );
+    setScenarios((current) => {
+      const targetScenario = current.find((scenario) => scenario.id === scenarioId);
+      const shouldExpand = Boolean(targetScenario?.collapsed);
+
+      return current.map((scenario) => ({
+        ...scenario,
+        collapsed: scenario.id === scenarioId ? !shouldExpand : true
+      }));
+    });
     setOpenPickerSlot((current) => (current?.scenarioId === scenarioId ? null : current));
     setSelectedAvailablePlayer((current) =>
       current?.scenarioId === scenarioId ? null : current
@@ -3444,19 +3876,107 @@ function TeamsContent() {
     );
   };
 
+  const updateScenarioStatsBalanceSelection = useCallback(
+    (
+      scenarioId: string,
+      updater: (selection: StatsBalanceLeafKey[]) => StatsBalanceLeafKey[]
+    ) => {
+      setStatsBalanceSelectionByScenario((current) => {
+        const currentSelection = current[scenarioId] ?? getDefaultStatsBalanceSelection();
+        const nextSelection = normalizeStatsBalanceSelection(updater(currentSelection));
+
+        if (areStatsBalanceSelectionsEqual(currentSelection, nextSelection)) {
+          return current;
+        }
+
+        return {
+          ...current,
+          [scenarioId]: nextSelection
+        };
+      });
+    },
+    []
+  );
+
+  const toggleScenarioStatsBalanceGroup = useCallback(
+    (scenarioId: string, keys: StatsBalanceLeafKey[]) => {
+      updateScenarioStatsBalanceSelection(scenarioId, (currentSelection) => {
+        const currentSet = new Set(currentSelection);
+        const shouldSelect = keys.some((key) => !currentSet.has(key));
+
+        if (shouldSelect) {
+          keys.forEach((key) => currentSet.add(key));
+        } else {
+          keys.forEach((key) => currentSet.delete(key));
+        }
+
+        return [...currentSet];
+      });
+    },
+    [updateScenarioStatsBalanceSelection]
+  );
+
+  const toggleScenarioStatsBalanceLeaf = useCallback(
+    (scenarioId: string, key: StatsBalanceLeafKey) => {
+      updateScenarioStatsBalanceSelection(scenarioId, (currentSelection) => {
+        const currentSet = new Set(currentSelection);
+
+        if (currentSet.has(key)) {
+          currentSet.delete(key);
+        } else {
+          currentSet.add(key);
+        }
+
+        return [...currentSet];
+      });
+    },
+    [updateScenarioStatsBalanceSelection]
+  );
+
+  const selectAllScenarioStatsBalanceOptions = useCallback((scenarioId: string) => {
+    setStatsBalanceSelectionByScenario((current) => {
+      const nextSelection = getDefaultStatsBalanceSelection();
+      const currentSelection = current[scenarioId] ?? nextSelection;
+
+      if (areStatsBalanceSelectionsEqual(currentSelection, nextSelection)) {
+        return current;
+      }
+
+      return {
+        ...current,
+        [scenarioId]: nextSelection
+      };
+    });
+  }, []);
+
+  const clearScenarioStatsBalanceOptions = useCallback((scenarioId: string) => {
+    setStatsBalanceSelectionByScenario((current) => {
+      const currentSelection = current[scenarioId] ?? getDefaultStatsBalanceSelection();
+      if (currentSelection.length === 0) {
+        return current;
+      }
+
+      return {
+        ...current,
+        [scenarioId]: []
+      };
+    });
+  }, []);
+
   const runBalancedScenarioRemainingPlayers = (
-    scenarioId: string,
-    mode: BalanceSelectionMode
+    scenarioId: string
   ) => {
     if (scenarioActionState) {
       return;
     }
 
     const scenario = scenarioById.get(scenarioId);
+    const selection = statsBalanceSelectionByScenario[scenarioId] ?? getDefaultStatsBalanceSelection();
+    const normalizedSelection = normalizeStatsBalanceSelection(selection);
     const availablePlayers = (availablePlayersByScenario.get(scenarioId) ?? []).filter(
       canPlayerBeAssignedFromPool
     );
-    if (!scenario || availablePlayers.length === 0) {
+    if (!scenario || availablePlayers.length === 0 || normalizedSelection.length === 0) {
       return;
     }
 
@@ -3468,10 +3988,9 @@ function TeamsContent() {
       return;
     }
 
-    const actionMode = mode === "overall" ? "balanceOverall" : "balanceCategories";
     beginScenarioAction(
       scenarioId,
-      actionMode,
+      "balanceStats",
       () =>
         chooseBestBalancedAssignments(
           scenario.assignments,
@@ -3479,8 +3998,12 @@ function TeamsContent() {
           availablePlayers,
           playerById,
           REMAINING_ASSIGNMENT_ATTEMPTS,
-          mode
-      )
+          normalizedSelection
+        ),
+      undefined,
+      {
+        balanceSummaryText: buildStatsBalanceSummaryText(normalizedSelection)
+      }
     );
   };
 
@@ -3977,7 +4500,12 @@ function TeamsContent() {
           const currentScenarioAction =
             scenarioActionState?.scenarioId === scenario.id ? scenarioActionState.mode : null;
           const currentScenarioSummary = scenarioActionSummaries[scenario.id] ?? null;
+          const currentStatsBalanceSelection =
+            statsBalanceSelectionByScenario[scenario.id] ?? getDefaultStatsBalanceSelection();
+          const hasSelectedStatsBalanceOptions = currentStatsBalanceSelection.length > 0;
+          const statsBalanceFilterOpen = openStatsBalanceFilterScenarioId === scenario.id;
           const currentScenarioUndoDepth = scenarioUndoStacks[scenario.id]?.length ?? 0;
+          const currentScenarioRedoDepth = scenarioRedoStacks[scenario.id]?.length ?? 0;
           const canViewNextGeneratedScenario = Boolean(
             currentScenarioSummary &&
               currentScenarioSummary.currentIndex < currentScenarioSummary.candidates.length - 1
@@ -3988,6 +4516,8 @@ function TeamsContent() {
           const hasAssignedPlayers = scenario.teams.some((team) =>
             POSITIONS.some((position) => (scenario.assignments[team.id]?.[position] ?? null) !== null)
           );
+          const statsBalanceControlsDisabled =
+            Boolean(scenarioActionState) || !hasAssignablePoolPlayers || !hasOpenSlots;
           const analyticsMode = analyticsModeByScenario[scenario.id] ?? "matchup";
           const isScenarioComplete =
             countFilledAssignments(scenario.assignments) === scenario.teams.length * POSITIONS.length;
@@ -4170,118 +4700,6 @@ function TeamsContent() {
                     }}
                     className={`available-shell${poolDropScenarioId === scenario.id ? " pool-drop-active" : ""}`}
                   >
-                    <div className="available-toolbar">
-                      <div className="available-actions available-actions-primary">
-                        <button
-                          type="button"
-                          className="available-reset-button"
-                          onClick={() => resetScenarioAssignments(scenario.id)}
-                          disabled={Boolean(scenarioActionState) || !hasAssignedPlayers}
-                        >
-                          <span className="available-action-button-label">Reset</span>
-                        </button>
-                        <button
-                          type="button"
-                          className="available-undo-button"
-                          onClick={() => undoScenarioAssignments(scenario.id)}
-                          disabled={Boolean(scenarioActionState) || currentScenarioUndoDepth === 0}
-                          aria-label="Undo last scenario change"
-                        >
-                          <span className="available-action-button-label">Undo</span>
-                        </button>
-                      </div>
-                      <div className="available-actions available-actions-generator-row">
-                        <span className="available-actions-label">Autofill Remaining Spots:</span>
-                        <button
-                          type="button"
-                          className={`available-randomize-button${currentScenarioAction === "randomize" ? " loading" : ""}`}
-                          aria-busy={currentScenarioAction === "randomize"}
-                          onClick={() => randomizeScenarioRemainingPlayers(scenario.id)}
-                          disabled={
-                            Boolean(scenarioActionState) ||
-                            !hasAssignablePoolPlayers ||
-                            !hasOpenSlots
-                          }
-                        >
-                          <span className="available-action-button-label">Random</span>
-                        </button>
-                        <button
-                          type="button"
-                          className={`available-randomize-button${currentScenarioAction === "balanceMatchup" ? " loading" : ""}`}
-                          aria-busy={currentScenarioAction === "balanceMatchup"}
-                          onClick={() => runMatchupBalancedScenarioRemainingPlayers(scenario.id)}
-                          disabled={
-                            Boolean(scenarioActionState) ||
-                            matchupBundleState.status !== "ready" ||
-                            !hasAssignablePoolPlayers ||
-                            !hasOpenSlots
-                          }
-                          title={
-                            matchupBundleState.status === "error"
-                              ? matchupBundleState.error
-                              : matchupBundleState.status === "loading"
-                                ? "Loading matchup data..."
-                                : undefined
-                          }
-                        >
-                          <span className="available-action-button-label">Matchups</span>
-                        </button>
-                        <button
-                          type="button"
-                          className={`available-randomize-button${currentScenarioAction === "balanceOverall" ? " loading" : ""}`}
-                          aria-busy={currentScenarioAction === "balanceOverall"}
-                          onClick={() => runBalancedScenarioRemainingPlayers(scenario.id, "overall")}
-                          disabled={
-                            Boolean(scenarioActionState) ||
-                            !hasAssignablePoolPlayers ||
-                            !hasOpenSlots
-                          }
-                        >
-                          <span className="available-action-button-label">Overall Stats</span>
-                        </button>
-                        <button
-                          type="button"
-                          className={`available-randomize-button${currentScenarioAction === "balanceCategories" ? " loading" : ""}`}
-                          aria-busy={currentScenarioAction === "balanceCategories"}
-                          onClick={() => runBalancedScenarioRemainingPlayers(scenario.id, "categories")}
-                          disabled={
-                            Boolean(scenarioActionState) ||
-                            !hasAssignablePoolPlayers ||
-                            !hasOpenSlots
-                          }
-                        >
-                          <span className="available-action-button-label">Category Stats</span>
-                        </button>
-                      </div>
-                    </div>
-                    {currentScenarioSummary ? (
-                      <div className="available-feedback" role="status" aria-live="polite">
-                        <span>
-                          {currentScenarioSummary.mode === "randomize"
-                            ? `Generated ${currentScenarioSummary.generatedCount} teams and selected one at random.`
-                            : currentScenarioSummary.mode === "balanceMatchup"
-                              ? `Generated ${currentScenarioSummary.generatedCount} random teams and selected the scenario with the fairest matchup profile.`
-                              : `Generated ${currentScenarioSummary.generatedCount} random teams, selected the scenario with the most balanced scores ${
-                                  currentScenarioSummary.mode === "balanceOverall"
-                                    ? "overall"
-                                    : "across each category"
-                                }.`}
-                        </span>
-                        {canViewNextGeneratedScenario ? (
-                          <button
-                            type="button"
-                            className="available-feedback-link"
-                            onClick={() => showNextGeneratedScenario(scenario.id)}
-                            disabled={Boolean(scenarioActionState)}
-                            aria-label="View next generated team setup"
-                          >
-                            {currentScenarioSummary.mode === "randomize"
-                              ? "View Next -->"
-                              : "View Next Best -->"}
-                          </button>
-                        ) : null}
-                      </div>
-                    ) : null}
                     <div className="available-header">
                       <h2 className="available-title">Player Pool</h2>
                     </div>
@@ -4293,6 +4711,14 @@ function TeamsContent() {
                         return (
                           <div
                             key={player.id}
+                            ref={(node) => {
+                              const key = getAvailableChipKey(scenario.id, player.id);
+                              if (node) {
+                                availableChipRefs.current.set(key, node);
+                              } else {
+                                availableChipRefs.current.delete(key);
+                              }
+                            }}
                             className={`player-chip available-player-chip${isSelected ? " selected" : ""}${isAssignable ? "" : " incomplete"}`}
                             title={
                               isAssignable
@@ -4329,6 +4755,208 @@ function TeamsContent() {
                         );
                       })}
                     </div>
+                    <div className="available-divider" aria-hidden="true" />
+                    <div className="available-toolbar">
+                      <div className="available-actions available-actions-primary">
+                        <button
+                          type="button"
+                          className="available-reset-button"
+                          onClick={() => resetScenarioAssignments(scenario.id)}
+                          disabled={Boolean(scenarioActionState) || !hasAssignedPlayers}
+                        >
+                          <span className="available-action-button-label">Clear</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="available-undo-button"
+                          onClick={() => undoScenarioAssignments(scenario.id)}
+                          disabled={Boolean(scenarioActionState) || currentScenarioUndoDepth === 0}
+                          aria-label="Undo last scenario change"
+                        >
+                          <span className="available-action-button-label">Undo</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="available-undo-button"
+                          onClick={() => redoScenarioAssignments(scenario.id)}
+                          disabled={Boolean(scenarioActionState) || currentScenarioRedoDepth === 0}
+                          aria-label="Redo last undone scenario change"
+                        >
+                          <span className="available-action-button-label">Redo</span>
+                        </button>
+                      </div>
+                      <div className="available-actions available-actions-generator-row">
+                        <span className="available-actions-label">Autofill</span>
+                        <button
+                          type="button"
+                          className={`available-randomize-button${currentScenarioAction === "randomize" ? " loading" : ""}`}
+                          aria-busy={currentScenarioAction === "randomize"}
+                          onClick={() => randomizeScenarioRemainingPlayers(scenario.id)}
+                          disabled={
+                            Boolean(scenarioActionState) ||
+                            !hasAssignablePoolPlayers ||
+                            !hasOpenSlots
+                          }
+                        >
+                          <span className="available-action-button-label">Random</span>
+                        </button>
+                        <button
+                          type="button"
+                          className={`available-randomize-button${currentScenarioAction === "balanceMatchup" ? " loading" : ""}`}
+                          aria-busy={currentScenarioAction === "balanceMatchup"}
+                          onClick={() => runMatchupBalancedScenarioRemainingPlayers(scenario.id)}
+                          disabled={
+                            Boolean(scenarioActionState) ||
+                            matchupBundleState.status !== "ready" ||
+                            !hasAssignablePoolPlayers ||
+                            !hasOpenSlots
+                          }
+                          title={
+                            matchupBundleState.status === "error"
+                              ? matchupBundleState.error
+                              : matchupBundleState.status === "loading"
+                                ? "Loading matchup data..."
+                                : undefined
+                          }
+                        >
+                          <span className="available-action-button-label">Balanced Matchups</span>
+                        </button>
+                        <div
+                          ref={(node) => {
+                            if (node) {
+                              statsBalanceFilterRefs.current.set(scenario.id, node);
+                            } else {
+                              statsBalanceFilterRefs.current.delete(scenario.id);
+                            }
+                          }}
+                          className={`available-balance-split${statsBalanceFilterOpen ? " open" : ""}`}
+                        >
+                          <button
+                            type="button"
+                            className={`available-randomize-button available-balance-split-main${currentScenarioAction === "balanceStats" ? " loading" : ""}`}
+                            aria-busy={currentScenarioAction === "balanceStats"}
+                            onClick={() => runBalancedScenarioRemainingPlayers(scenario.id)}
+                            disabled={
+                              statsBalanceControlsDisabled ||
+                              !hasSelectedStatsBalanceOptions
+                            }
+                          >
+                            <span className="available-action-button-label">Balanced Stats</span>
+                          </button>
+                          <button
+                            type="button"
+                            className="available-randomize-button available-balance-split-toggle"
+                            aria-label="Choose balanced stats filters"
+                            aria-expanded={statsBalanceFilterOpen}
+                            disabled={statsBalanceControlsDisabled}
+                            onClick={() =>
+                              setOpenStatsBalanceFilterScenarioId((current) =>
+                                current === scenario.id ? null : scenario.id
+                              )
+                            }
+                          >
+                            <span className="available-balance-split-caret" aria-hidden="true">
+                              ▾
+                            </span>
+                          </button>
+                          {statsBalanceFilterOpen && !statsBalanceControlsDisabled ? (
+                            <div className="available-balance-dropdown">
+                              <div className="available-balance-dropdown-actions">
+                                <button
+                                  type="button"
+                                  className="available-balance-dropdown-link"
+                                  onClick={() => selectAllScenarioStatsBalanceOptions(scenario.id)}
+                                >
+                                  Select All
+                                </button>
+                                <button
+                                  type="button"
+                                  className="available-balance-dropdown-link"
+                                  onClick={() => clearScenarioStatsBalanceOptions(scenario.id)}
+                                >
+                                  Clear
+                                </button>
+                              </div>
+                              <div className="available-balance-dropdown-groups">
+                                {SCENARIO_STATS_BALANCE_FILTER_GROUPS.map((group) => {
+                                  const selectedCount = group.options.filter((option) =>
+                                    currentStatsBalanceSelection.includes(option.key)
+                                  ).length;
+                                  const allSelected = selectedCount === group.options.length;
+                                  const partiallySelected = selectedCount > 0 && !allSelected;
+
+                                  return (
+                                    <div key={group.key} className="available-balance-dropdown-group">
+                                      <label className="available-balance-option available-balance-option-parent">
+                                        <input
+                                          type="checkbox"
+                                          checked={allSelected}
+                                          ref={(node) => {
+                                            if (node) {
+                                              node.indeterminate = partiallySelected;
+                                            }
+                                          }}
+                                          onChange={() =>
+                                            toggleScenarioStatsBalanceGroup(
+                                              scenario.id,
+                                              group.options.map((option) => option.key)
+                                            )
+                                          }
+                                        />
+                                        <span>{group.label}</span>
+                                      </label>
+                                      <div className="available-balance-dropdown-suboptions">
+                                        {group.options.map((option) => (
+                                          <label key={option.key} className="available-balance-option">
+                                            <input
+                                              type="checkbox"
+                                              checked={currentStatsBalanceSelection.includes(option.key)}
+                                              onChange={() =>
+                                                toggleScenarioStatsBalanceLeaf(scenario.id, option.key)
+                                              }
+                                            />
+                                            <span>{option.label}</span>
+                                          </label>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ) : null}
+                        </div>
+                      </div>
+                    </div>
+                    {currentScenarioSummary ? (
+                      <div className="available-feedback" role="status" aria-live="polite">
+                        <span>
+                          {currentScenarioSummary.mode === "randomize"
+                            ? `Generated ${currentScenarioSummary.generatedCount} teams and selected one at random.`
+                            : currentScenarioSummary.mode === "balanceMatchup"
+                              ? `Generated ${currentScenarioSummary.generatedCount} random teams and selected the scenario with the fairest matchup profile.`
+                              : `Generated ${currentScenarioSummary.generatedCount} random teams, selected the scenario with the most balanced scores ${
+                                  currentScenarioSummary.balanceSummaryText === "overall"
+                                    ? "overall"
+                                    : `across ${currentScenarioSummary.balanceSummaryText ?? "selected stats"}`
+                                }.`}
+                        </span>
+                        {canViewNextGeneratedScenario ? (
+                          <button
+                            type="button"
+                            className="available-feedback-link"
+                            onClick={() => showNextGeneratedScenario(scenario.id)}
+                            disabled={Boolean(scenarioActionState)}
+                            aria-label="View next generated team setup"
+                          >
+                            {currentScenarioSummary.mode === "randomize"
+                              ? "View Next -->"
+                              : "View Next Best -->"}
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    <div className="available-divider" aria-hidden="true" />
                   </div>
                   <div className="teams-grid">
                     {scenario.teams.map((team, teamIndex) => (
@@ -4688,22 +5316,32 @@ function TeamColumn({
   return (
     <section className="team-card">
       <div className="team-name team-name-editor">
-        <div className="team-name-toolbar">
+        <div className="team-name-edit-row">
+          <textarea
+            ref={nameInputRef}
+            className={`team-inline-name-input${teamNameError ? " invalid" : ""}`}
+            value={draftName}
+            onChange={(event) => onNameChange(event.target.value.replace(/\s*\n+\s*/g, " "))}
+            onBlur={() => onNameCommit({ immediate: true })}
+            placeholder={`Team ${teamIndex + 1}`}
+            spellCheck={false}
+            disabled={teamEditingDisabled}
+            rows={1}
+          />
           <button
             type="button"
-            className="team-config-remove-button team-inline-remove-button"
-            onClick={onRemoveTeam}
-            disabled={!canRemoveTeam || teamEditingDisabled}
-          >
-            Remove
-          </button>
-          <button
-            type="button"
-            className="team-config-remove-button team-inline-rename-button"
+            className="team-config-remove-button team-inline-icon-button team-inline-rename-button"
             onClick={onRenameTeam}
             disabled={teamEditingDisabled}
+            aria-label={`Generate a new name for ${teamLabel}`}
+            title="Generate team name"
           >
-            Name Generator
+            <img
+              aria-hidden="true"
+              alt=""
+              src="/team-name-shuffle.png"
+              className="team-inline-icon-image"
+            />
           </button>
           <label className="team-config-color-row">
             <input
@@ -4715,18 +5353,22 @@ function TeamColumn({
               disabled={teamEditingDisabled}
             />
           </label>
+          <button
+            type="button"
+            className="team-config-remove-button team-inline-icon-button team-inline-remove-button"
+            onClick={onRemoveTeam}
+            disabled={!canRemoveTeam || teamEditingDisabled}
+            aria-label={`Remove ${teamLabel}`}
+            title="Remove team"
+          >
+            <img
+              aria-hidden="true"
+              alt=""
+              src="/team-remove-trash.png"
+              className="team-inline-icon-image"
+            />
+          </button>
         </div>
-        <textarea
-          ref={nameInputRef}
-          className={`team-inline-name-input${teamNameError ? " invalid" : ""}`}
-          value={draftName}
-          onChange={(event) => onNameChange(event.target.value.replace(/\s*\n+\s*/g, " "))}
-          onBlur={() => onNameCommit({ immediate: true })}
-          placeholder={`Team ${teamIndex + 1}`}
-          spellCheck={false}
-          disabled={teamEditingDisabled}
-          rows={1}
-        />
         {teamNameError ? <div className="team-inline-error">{teamNameError}</div> : null}
       </div>
       <div className="team-slots">
