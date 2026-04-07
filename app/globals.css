@@ -1191,16 +1191,9 @@ select {
 }
 
 .scenario-toggle-icon {
-  width: 8px;
-  height: 8px;
-  border-right: 2px solid currentColor;
-  border-bottom: 2px solid currentColor;
-  transform: rotate(45deg) translateY(-1px);
-  transition: transform 140ms ease;
-}
-
-.scenario-toggle.collapsed .scenario-toggle-icon {
-  transform: rotate(-45deg);
+  display: block;
+  width: 12px;
+  height: 12px;
 }
 
 .board-shell.collapsed {
@@ -1209,6 +1202,18 @@ select {
 
 .board-shell.collapsed .scenario-header {
   margin-bottom: 0;
+  align-items: center;
+}
+
+.board-shell.collapsed .scenario-header-main {
+  align-items: center;
+}
+
+.board-shell.collapsed .scenario-title-input {
+  border-bottom-color: transparent;
+  padding-bottom: 0;
+  cursor: default;
+  pointer-events: none;
 }
 
 .scenario-body {
@@ -1439,11 +1444,26 @@ select {
   gap: 8px;
 }
 
+.scenario-setup-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 248px) minmax(0, 1fr);
+  gap: 8px;
+  align-items: stretch;
+}
+
+.scenario-teams-panel {
+  min-width: 0;
+}
+
 .team-card {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
   padding: 7px;
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.08);
   border: 1px solid rgba(255, 255, 255, 0.1);
+  container-type: inline-size;
 }
 
 .team-name {
@@ -1474,12 +1494,24 @@ select {
   font-size: 1rem;
 }
 
+.team-name-editor.force-two-line {
+  min-height: 92px;
+}
+
 .team-name-edit-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 30px 30px 30px;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   width: 100%;
+}
+
+.team-name-controls {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: 0 0 auto;
 }
 
 .team-inline-name-input {
@@ -1566,6 +1598,16 @@ select {
 .team-inline-add-card:disabled {
   opacity: 0.56;
   cursor: not-allowed;
+}
+
+@container (max-width: 245px) {
+  .team-name-edit-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .team-name-controls {
+    justify-content: center;
+  }
 }
 
 .team-slots {
@@ -1764,6 +1806,9 @@ select {
 }
 
 .available-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
   margin-bottom: 0;
   padding-bottom: 0;
   transition: box-shadow 120ms ease, transform 120ms ease;
@@ -1795,6 +1840,14 @@ select {
   flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 7px;
+}
+
+.scenario-body-inner > .available-toolbar {
+  margin-bottom: 0;
+}
+
+.scenario-body-inner > .available-toolbar + .available-divider {
+  margin: 4px 0 9px;
 }
 
 .available-actions {
@@ -2944,15 +2997,21 @@ select {
 }
 
 .available-players {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: 6px;
+  row-gap: 5px;
+  align-content: start;
 }
 
 .available-player-chip {
-  width: auto;
+  width: 100%;
+  min-height: 0;
+  height: auto;
   max-width: 100%;
-  flex: 0 0 auto;
+  padding: 5px 6px;
+  font-size: 0.82rem;
+  line-height: 1.05;
   background: rgba(255, 255, 255, 0.96);
   color: #171c18;
 }

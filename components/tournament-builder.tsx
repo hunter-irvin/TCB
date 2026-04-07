@@ -54,6 +54,7 @@ import type { ReactNode } from "react";
 
 type BuilderContextValue = {
   loading: boolean;
+  rosterHydrated: boolean;
   players: Player[];
   assignments: Assignments;
   syncError: string | null;
@@ -205,6 +206,7 @@ async function pushPlayersSnapshot(
 export function TournamentBuilderProvider({ children }: { children: ReactNode }) {
   const { run } = useRun();
   const [loading, setLoading] = useState(true);
+  const [rosterHydrated, setRosterHydrated] = useState(false);
   const [state, setState] = useState<AppState | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const latestStateRef = useRef<AppState | null>(null);
@@ -330,6 +332,8 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
 
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
+    setRosterHydrated(false);
 
     async function loadState() {
       const stored =
@@ -345,18 +349,20 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
           assignments: localState.assignments,
           seedVersion: localState.seedVersion ?? SEED_VERSION
         });
-        setLoading(false);
       }
 
       if (!localState) {
         const seeded = createInitialState(defaultPlayers);
         if (!cancelled) {
           setState(seeded);
-          setLoading(false);
         }
       }
 
       if (!hasSupabaseBrowserConfig()) {
+        if (!cancelled) {
+          setLoading(false);
+          setRosterHydrated(true);
+        }
         return;
       }
 
@@ -376,6 +382,8 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
           pendingPlayerSyncRef.current = localPlayers;
           setSyncError("Migrating local roster to Supabase.");
           suppressRealtimeRef.current = true;
+          setLoading(false);
+          setRosterHydrated(true);
           return;
         }
 
@@ -394,9 +402,13 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
         syncPlayerRefFromSnapshot(backendPlayers);
         setSyncError(null);
         suppressRealtimeRef.current = false;
+        setLoading(false);
+        setRosterHydrated(true);
       } catch {
         if (!cancelled) {
           setSyncError("Unable to load roster from Supabase. Using local data.");
+          setLoading(false);
+          setRosterHydrated(true);
         }
       }
     }
@@ -749,6 +761,7 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
   const value = useMemo<BuilderContextValue>(
     () => ({
       loading,
+      rosterHydrated,
       players: state?.players ?? defaultPlayers,
       assignments: state?.assignments ?? createEmptyAssignments(),
       syncError,
@@ -771,6 +784,7 @@ export function TournamentBuilderProvider({ children }: { children: ReactNode })
       deletePlayer,
       getEligibleForSlot,
       loading,
+      rosterHydrated,
       defaultPlayers,
       retrySync,
       state,

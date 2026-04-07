@@ -449,6 +449,20 @@ function createScenario(index: number, runSlug: string, teams: Team[] = createDe
   };
 }
 
+function ScenarioToggleIcon({ collapsed }: { collapsed: boolean }) {
+  return (
+    <svg className="scenario-toggle-icon" aria-hidden="true" viewBox="0 0 12 12" fill="none">
+      <path
+        d={collapsed ? "M2.25 4.25 6 8 9.75 4.25" : "M2.25 7.75 6 4 9.75 7.75"}
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function buildScenarioTeamAttributeTotals(
   assignments: Assignments,
   playersById: ReadonlyMap<number, Player>,
@@ -1808,6 +1822,29 @@ function canPlayerBeAssignedFromPool(player: Player) {
   return canPlayerAppearInPool(player) && player.positions.length > 0;
 }
 
+function orderPlayersForPoolColumns(players: Player[], columnCount = 2) {
+  if (columnCount <= 1 || players.length <= 1) {
+    return players;
+  }
+
+  const rowCount = Math.ceil(players.length / columnCount);
+  const columns = Array.from({ length: columnCount }, (_, columnIndex) =>
+    players.slice(columnIndex * rowCount, (columnIndex + 1) * rowCount)
+  );
+  const ordered: Player[] = [];
+
+  for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+    for (let columnIndex = 0; columnIndex < columnCount; columnIndex += 1) {
+      const player = columns[columnIndex][rowIndex];
+      if (player) {
+        ordered.push(player);
+      }
+    }
+  }
+
+  return ordered;
+}
+
 function createDragPreview(node: HTMLDivElement): HTMLDivElement {
   const preview = node.cloneNode(true) as HTMLDivElement;
   preview.classList.add("drag-preview");
@@ -2012,7 +2049,8 @@ function resolveNearestSlotFromPoint(
 
 function TeamsContent() {
   const { run } = useRun();
-  const { loading, players, retrySync, syncError: playerSyncError } = useTournamentBuilder();
+  const { loading, rosterHydrated, players, retrySync, syncError: playerSyncError } =
+    useTournamentBuilder();
   const cellRefs = useRef(new Map<string, HTMLDivElement>());
   const wrapRefs = useRef(new Map<string, HTMLDivElement>());
   const chipRefs = useRef(new Map<string, HTMLDivElement>());
@@ -2110,6 +2148,9 @@ function TeamsContent() {
   const [openStatsBalanceFilterScenarioId, setOpenStatsBalanceFilterScenarioId] = useState<string | null>(
     null
   );
+  const [scenarioWrappedTeamNames, setScenarioWrappedTeamNames] = useState<
+    Record<string, Record<string, boolean>>
+  >({});
 
   const playerById = useMemo(
     () => new Map(players.map((player) => [player.id, player])),
@@ -2294,6 +2335,35 @@ function TeamsContent() {
   }, [openStatsBalanceFilterScenarioId, scenarios]);
 
   useEffect(() => {
+    const validTeamsByScenario = new Map(
+      scenarios.map((scenario) => [scenario.id, new Set(scenario.teams.map((team) => team.id))] as const)
+    );
+
+    setScenarioWrappedTeamNames((current) => {
+      let didChange = false;
+      const nextEntries = Object.entries(current).flatMap(([scenarioId, wrappedByTeamId]) => {
+        const validTeamIds = validTeamsByScenario.get(scenarioId);
+        if (!validTeamIds) {
+          didChange = true;
+          return [];
+        }
+
+        const nextWrappedByTeamId = Object.fromEntries(
+          Object.entries(wrappedByTeamId).filter(([teamId]) => validTeamIds.has(teamId))
+        );
+
+        if (Object.keys(nextWrappedByTeamId).length !== Object.keys(wrappedByTeamId).length) {
+          didChange = true;
+        }
+
+        return [[scenarioId, nextWrappedByTeamId] as const];
+      });
+
+      return didChange ? Object.fromEntries(nextEntries) : current;
+    });
+  }, [scenarios]);
+
+  useEffect(() => {
     if (!openStatsBalanceFilterScenarioId) {
       return;
     }
@@ -2430,7 +2500,7 @@ function TeamsContent() {
       storedState?.scenarios.length
         ? normalizeScenarioIds(storedState.scenarios).map((scenario) => ({
             ...scenario,
-            collapsed: scenario.collapsed ?? true
+            collapsed: true
           }))
         : [];
 
@@ -2996,7 +3066,8 @@ function TeamsContent() {
   );
 
   useEffect(() => {
-    if (loading) {
+    // Wait until the roster has finished hydrating from the backend before pruning scenario slots.
+    if (loading || !rosterHydrated) {
       return;
     }
 
@@ -3022,7 +3093,7 @@ function TeamsContent() {
       queueScenarioAssignmentsSync(nextScenarios, dirtyScenarioIds);
       return nextScenarios;
     });
-  }, [loading, players, queueScenarioAssignmentsSync]);
+  }, [loading, players, queueScenarioAssignmentsSync, rosterHydrated]);
 
   useEffect(() => {
     if (!hasSupabaseBrowserConfig()) {
@@ -4420,7 +4491,7 @@ function TeamsContent() {
   return (
     <AppShell
       title="Teams Board"
-      copy="Build independent team scenarios. Players can move only within the scenario they belong to."
+      copy={null}
     >
       <div className="status-bar">
         {loading ? <div className="status-chip">Loading roster seed...</div> : null}
@@ -4560,6 +4631,10 @@ function TeamsContent() {
           const scenarioCollapsed = Boolean(scenarioReorder) || scenario.collapsed;
           const scenarioIsDragging = scenarioReorder?.scenarioId === scenario.id;
           const deleteModalOpen = scenarioPendingDeleteId === scenario.id;
+          const orderedAvailablePlayers = orderPlayersForPoolColumns(availablePlayers);
+          const scenarioForceTwoLineNames = Object.values(
+            scenarioWrappedTeamNames[scenario.id] ?? {}
+          ).some(Boolean);
 
           return (
             <section
@@ -4637,6 +4712,9 @@ function TeamsContent() {
                     aria-label={`Scenario title for ${scenario.title || "scenario"}`}
                     placeholder="Team Scenario"
                     spellCheck={false}
+                    readOnly={scenarioCollapsed}
+                    tabIndex={scenarioCollapsed ? -1 : 0}
+                    aria-readonly={scenarioCollapsed}
                     disabled={deleteModalOpen}
                   />
                   <div className="scenario-header-actions">
@@ -4683,13 +4761,215 @@ function TeamsContent() {
                       onClick={() => toggleScenarioCollapsed(scenario.id)}
                       disabled={deleteModalOpen}
                     >
-                      <span className="scenario-toggle-icon" aria-hidden="true" />
+                      <ScenarioToggleIcon collapsed={scenarioCollapsed} />
                     </button>
                   </div>
                 </div>
               </div>
               <div className="scenario-body" aria-hidden={scenarioCollapsed}>
                 <div className="scenario-body-inner">
+                  <div className="available-toolbar">
+                    <div className="available-actions available-actions-primary">
+                      <button
+                        type="button"
+                        className="available-reset-button"
+                        onClick={() => resetScenarioAssignments(scenario.id)}
+                        disabled={Boolean(scenarioActionState) || !hasAssignedPlayers}
+                      >
+                        <span className="available-action-button-label">Clear</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="available-undo-button"
+                        onClick={() => undoScenarioAssignments(scenario.id)}
+                        disabled={Boolean(scenarioActionState) || currentScenarioUndoDepth === 0}
+                        aria-label="Undo last scenario change"
+                      >
+                        <span className="available-action-button-label">Undo</span>
+                      </button>
+                      <button
+                        type="button"
+                        className="available-undo-button"
+                        onClick={() => redoScenarioAssignments(scenario.id)}
+                        disabled={Boolean(scenarioActionState) || currentScenarioRedoDepth === 0}
+                        aria-label="Redo last undone scenario change"
+                      >
+                        <span className="available-action-button-label">Redo</span>
+                      </button>
+                    </div>
+                    <div className="available-actions available-actions-generator-row">
+                      <span className="available-actions-label">Autofill</span>
+                      <button
+                        type="button"
+                        className={`available-randomize-button${currentScenarioAction === "randomize" ? " loading" : ""}`}
+                        aria-busy={currentScenarioAction === "randomize"}
+                        onClick={() => randomizeScenarioRemainingPlayers(scenario.id)}
+                        disabled={
+                          Boolean(scenarioActionState) ||
+                          !hasAssignablePoolPlayers ||
+                          !hasOpenSlots
+                        }
+                      >
+                        <span className="available-action-button-label">Random</span>
+                      </button>
+                      <button
+                        type="button"
+                        className={`available-randomize-button${currentScenarioAction === "balanceMatchup" ? " loading" : ""}`}
+                        aria-busy={currentScenarioAction === "balanceMatchup"}
+                        onClick={() => runMatchupBalancedScenarioRemainingPlayers(scenario.id)}
+                        disabled={
+                          Boolean(scenarioActionState) ||
+                          matchupBundleState.status !== "ready" ||
+                          !hasAssignablePoolPlayers ||
+                          !hasOpenSlots
+                        }
+                        title={
+                          matchupBundleState.status === "error"
+                            ? matchupBundleState.error
+                            : matchupBundleState.status === "loading"
+                              ? "Loading matchup data..."
+                              : undefined
+                        }
+                      >
+                        <span className="available-action-button-label">Balanced Matchups</span>
+                      </button>
+                      <div
+                        ref={(node) => {
+                          if (node) {
+                            statsBalanceFilterRefs.current.set(scenario.id, node);
+                          } else {
+                            statsBalanceFilterRefs.current.delete(scenario.id);
+                          }
+                        }}
+                        className={`available-balance-split${statsBalanceFilterOpen ? " open" : ""}`}
+                      >
+                        <button
+                          type="button"
+                          className={`available-randomize-button available-balance-split-main${currentScenarioAction === "balanceStats" ? " loading" : ""}`}
+                          aria-busy={currentScenarioAction === "balanceStats"}
+                          onClick={() => runBalancedScenarioRemainingPlayers(scenario.id)}
+                          disabled={
+                            statsBalanceControlsDisabled ||
+                            !hasSelectedStatsBalanceOptions
+                          }
+                        >
+                          <span className="available-action-button-label">Balanced Stats</span>
+                        </button>
+                        <button
+                          type="button"
+                          className="available-randomize-button available-balance-split-toggle"
+                          aria-label="Choose balanced stats filters"
+                          aria-expanded={statsBalanceFilterOpen}
+                          disabled={statsBalanceControlsDisabled}
+                          onClick={() =>
+                            setOpenStatsBalanceFilterScenarioId((current) =>
+                              current === scenario.id ? null : scenario.id
+                            )
+                          }
+                        >
+                          <span className="available-balance-split-caret" aria-hidden="true">
+                            ▾
+                          </span>
+                        </button>
+                        {statsBalanceFilterOpen && !statsBalanceControlsDisabled ? (
+                          <div className="available-balance-dropdown">
+                            <div className="available-balance-dropdown-actions">
+                              <button
+                                type="button"
+                                className="available-balance-dropdown-link"
+                                onClick={() => selectAllScenarioStatsBalanceOptions(scenario.id)}
+                              >
+                                Select All
+                              </button>
+                              <button
+                                type="button"
+                                className="available-balance-dropdown-link"
+                                onClick={() => clearScenarioStatsBalanceOptions(scenario.id)}
+                              >
+                                Clear
+                              </button>
+                            </div>
+                            <div className="available-balance-dropdown-groups">
+                              {SCENARIO_STATS_BALANCE_FILTER_GROUPS.map((group) => {
+                                const selectedCount = group.options.filter((option) =>
+                                  currentStatsBalanceSelection.includes(option.key)
+                                ).length;
+                                const allSelected = selectedCount === group.options.length;
+                                const partiallySelected = selectedCount > 0 && !allSelected;
+
+                                return (
+                                  <div key={group.key} className="available-balance-dropdown-group">
+                                    <label className="available-balance-option available-balance-option-parent">
+                                      <input
+                                        type="checkbox"
+                                        checked={allSelected}
+                                        ref={(node) => {
+                                          if (node) {
+                                            node.indeterminate = partiallySelected;
+                                          }
+                                        }}
+                                        onChange={() =>
+                                          toggleScenarioStatsBalanceGroup(
+                                            scenario.id,
+                                            group.options.map((option) => option.key)
+                                          )
+                                        }
+                                      />
+                                      <span>{group.label}</span>
+                                    </label>
+                                    <div className="available-balance-dropdown-suboptions">
+                                      {group.options.map((option) => (
+                                        <label key={option.key} className="available-balance-option">
+                                          <input
+                                            type="checkbox"
+                                            checked={currentStatsBalanceSelection.includes(option.key)}
+                                            onChange={() =>
+                                              toggleScenarioStatsBalanceLeaf(scenario.id, option.key)
+                                            }
+                                          />
+                                          <span>{option.label}</span>
+                                        </label>
+                                      ))}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>
+                  {currentScenarioSummary ? (
+                    <div className="available-feedback" role="status" aria-live="polite">
+                      <span>
+                        {currentScenarioSummary.mode === "randomize"
+                          ? `Generated ${currentScenarioSummary.generatedCount} teams and selected one at random.`
+                          : currentScenarioSummary.mode === "balanceMatchup"
+                            ? `Generated ${currentScenarioSummary.generatedCount} random teams and selected the scenario with the fairest matchup profile.`
+                            : `Generated ${currentScenarioSummary.generatedCount} random teams, selected the scenario with the most balanced scores ${
+                                currentScenarioSummary.balanceSummaryText === "overall"
+                                  ? "overall"
+                                  : `across ${currentScenarioSummary.balanceSummaryText ?? "selected stats"}`
+                              }.`}
+                      </span>
+                      {canViewNextGeneratedScenario ? (
+                        <button
+                          type="button"
+                          className="available-feedback-link"
+                          onClick={() => showNextGeneratedScenario(scenario.id)}
+                          disabled={Boolean(scenarioActionState)}
+                          aria-label="View next generated team setup"
+                        >
+                          {currentScenarioSummary.mode === "randomize"
+                            ? "View Next -->"
+                            : "View Next Best -->"}
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  <div className="available-divider" aria-hidden="true" />
+                  <div className="scenario-setup-grid">
                   <div
                     ref={(node) => {
                       if (node) {
@@ -4698,13 +4978,13 @@ function TeamsContent() {
                         poolRefs.current.delete(scenario.id);
                       }
                     }}
-                    className={`available-shell${poolDropScenarioId === scenario.id ? " pool-drop-active" : ""}`}
+                    className={`team-card available-shell scenario-pool-card${poolDropScenarioId === scenario.id ? " pool-drop-active" : ""}`}
                   >
                     <div className="available-header">
                       <h2 className="available-title">Player Pool</h2>
                     </div>
                     <div className="available-players">
-                      {availablePlayers.map((player) => {
+                      {orderedAvailablePlayers.map((player) => {
                         const isSelected = selectedAvailablePlayerId === player.id;
                         const isAssignable = canPlayerBeAssignedFromPool(player);
                         const poolName = getPlayerPoolName(player);
@@ -4755,209 +5035,8 @@ function TeamsContent() {
                         );
                       })}
                     </div>
-                    <div className="available-divider" aria-hidden="true" />
-                    <div className="available-toolbar">
-                      <div className="available-actions available-actions-primary">
-                        <button
-                          type="button"
-                          className="available-reset-button"
-                          onClick={() => resetScenarioAssignments(scenario.id)}
-                          disabled={Boolean(scenarioActionState) || !hasAssignedPlayers}
-                        >
-                          <span className="available-action-button-label">Clear</span>
-                        </button>
-                        <button
-                          type="button"
-                          className="available-undo-button"
-                          onClick={() => undoScenarioAssignments(scenario.id)}
-                          disabled={Boolean(scenarioActionState) || currentScenarioUndoDepth === 0}
-                          aria-label="Undo last scenario change"
-                        >
-                          <span className="available-action-button-label">Undo</span>
-                        </button>
-                        <button
-                          type="button"
-                          className="available-undo-button"
-                          onClick={() => redoScenarioAssignments(scenario.id)}
-                          disabled={Boolean(scenarioActionState) || currentScenarioRedoDepth === 0}
-                          aria-label="Redo last undone scenario change"
-                        >
-                          <span className="available-action-button-label">Redo</span>
-                        </button>
-                      </div>
-                      <div className="available-actions available-actions-generator-row">
-                        <span className="available-actions-label">Autofill</span>
-                        <button
-                          type="button"
-                          className={`available-randomize-button${currentScenarioAction === "randomize" ? " loading" : ""}`}
-                          aria-busy={currentScenarioAction === "randomize"}
-                          onClick={() => randomizeScenarioRemainingPlayers(scenario.id)}
-                          disabled={
-                            Boolean(scenarioActionState) ||
-                            !hasAssignablePoolPlayers ||
-                            !hasOpenSlots
-                          }
-                        >
-                          <span className="available-action-button-label">Random</span>
-                        </button>
-                        <button
-                          type="button"
-                          className={`available-randomize-button${currentScenarioAction === "balanceMatchup" ? " loading" : ""}`}
-                          aria-busy={currentScenarioAction === "balanceMatchup"}
-                          onClick={() => runMatchupBalancedScenarioRemainingPlayers(scenario.id)}
-                          disabled={
-                            Boolean(scenarioActionState) ||
-                            matchupBundleState.status !== "ready" ||
-                            !hasAssignablePoolPlayers ||
-                            !hasOpenSlots
-                          }
-                          title={
-                            matchupBundleState.status === "error"
-                              ? matchupBundleState.error
-                              : matchupBundleState.status === "loading"
-                                ? "Loading matchup data..."
-                                : undefined
-                          }
-                        >
-                          <span className="available-action-button-label">Balanced Matchups</span>
-                        </button>
-                        <div
-                          ref={(node) => {
-                            if (node) {
-                              statsBalanceFilterRefs.current.set(scenario.id, node);
-                            } else {
-                              statsBalanceFilterRefs.current.delete(scenario.id);
-                            }
-                          }}
-                          className={`available-balance-split${statsBalanceFilterOpen ? " open" : ""}`}
-                        >
-                          <button
-                            type="button"
-                            className={`available-randomize-button available-balance-split-main${currentScenarioAction === "balanceStats" ? " loading" : ""}`}
-                            aria-busy={currentScenarioAction === "balanceStats"}
-                            onClick={() => runBalancedScenarioRemainingPlayers(scenario.id)}
-                            disabled={
-                              statsBalanceControlsDisabled ||
-                              !hasSelectedStatsBalanceOptions
-                            }
-                          >
-                            <span className="available-action-button-label">Balanced Stats</span>
-                          </button>
-                          <button
-                            type="button"
-                            className="available-randomize-button available-balance-split-toggle"
-                            aria-label="Choose balanced stats filters"
-                            aria-expanded={statsBalanceFilterOpen}
-                            disabled={statsBalanceControlsDisabled}
-                            onClick={() =>
-                              setOpenStatsBalanceFilterScenarioId((current) =>
-                                current === scenario.id ? null : scenario.id
-                              )
-                            }
-                          >
-                            <span className="available-balance-split-caret" aria-hidden="true">
-                              ▾
-                            </span>
-                          </button>
-                          {statsBalanceFilterOpen && !statsBalanceControlsDisabled ? (
-                            <div className="available-balance-dropdown">
-                              <div className="available-balance-dropdown-actions">
-                                <button
-                                  type="button"
-                                  className="available-balance-dropdown-link"
-                                  onClick={() => selectAllScenarioStatsBalanceOptions(scenario.id)}
-                                >
-                                  Select All
-                                </button>
-                                <button
-                                  type="button"
-                                  className="available-balance-dropdown-link"
-                                  onClick={() => clearScenarioStatsBalanceOptions(scenario.id)}
-                                >
-                                  Clear
-                                </button>
-                              </div>
-                              <div className="available-balance-dropdown-groups">
-                                {SCENARIO_STATS_BALANCE_FILTER_GROUPS.map((group) => {
-                                  const selectedCount = group.options.filter((option) =>
-                                    currentStatsBalanceSelection.includes(option.key)
-                                  ).length;
-                                  const allSelected = selectedCount === group.options.length;
-                                  const partiallySelected = selectedCount > 0 && !allSelected;
-
-                                  return (
-                                    <div key={group.key} className="available-balance-dropdown-group">
-                                      <label className="available-balance-option available-balance-option-parent">
-                                        <input
-                                          type="checkbox"
-                                          checked={allSelected}
-                                          ref={(node) => {
-                                            if (node) {
-                                              node.indeterminate = partiallySelected;
-                                            }
-                                          }}
-                                          onChange={() =>
-                                            toggleScenarioStatsBalanceGroup(
-                                              scenario.id,
-                                              group.options.map((option) => option.key)
-                                            )
-                                          }
-                                        />
-                                        <span>{group.label}</span>
-                                      </label>
-                                      <div className="available-balance-dropdown-suboptions">
-                                        {group.options.map((option) => (
-                                          <label key={option.key} className="available-balance-option">
-                                            <input
-                                              type="checkbox"
-                                              checked={currentStatsBalanceSelection.includes(option.key)}
-                                              onChange={() =>
-                                                toggleScenarioStatsBalanceLeaf(scenario.id, option.key)
-                                              }
-                                            />
-                                            <span>{option.label}</span>
-                                          </label>
-                                        ))}
-                                      </div>
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          ) : null}
-                        </div>
-                      </div>
-                    </div>
-                    {currentScenarioSummary ? (
-                      <div className="available-feedback" role="status" aria-live="polite">
-                        <span>
-                          {currentScenarioSummary.mode === "randomize"
-                            ? `Generated ${currentScenarioSummary.generatedCount} teams and selected one at random.`
-                            : currentScenarioSummary.mode === "balanceMatchup"
-                              ? `Generated ${currentScenarioSummary.generatedCount} random teams and selected the scenario with the fairest matchup profile.`
-                              : `Generated ${currentScenarioSummary.generatedCount} random teams, selected the scenario with the most balanced scores ${
-                                  currentScenarioSummary.balanceSummaryText === "overall"
-                                    ? "overall"
-                                    : `across ${currentScenarioSummary.balanceSummaryText ?? "selected stats"}`
-                                }.`}
-                        </span>
-                        {canViewNextGeneratedScenario ? (
-                          <button
-                            type="button"
-                            className="available-feedback-link"
-                            onClick={() => showNextGeneratedScenario(scenario.id)}
-                            disabled={Boolean(scenarioActionState)}
-                            aria-label="View next generated team setup"
-                          >
-                            {currentScenarioSummary.mode === "randomize"
-                              ? "View Next -->"
-                              : "View Next Best -->"}
-                          </button>
-                        ) : null}
-                      </div>
-                    ) : null}
-                    <div className="available-divider" aria-hidden="true" />
                   </div>
+                  <div className="scenario-teams-panel">
                   <div className="teams-grid">
                     {scenario.teams.map((team, teamIndex) => (
                       <TeamColumn
@@ -4965,15 +5044,32 @@ function TeamsContent() {
                         scenarioId={scenario.id}
                         team={team}
                         teamIndex={teamIndex}
-                        teamNameError={scenarioTeamNameErrors[teamIndex] ?? null}
-                        draftName={scenarioDraftTeams[teamIndex]?.name ?? team.name}
-                        draftColor={scenarioDraftTeams[teamIndex]?.color ?? team.color}
-                        canRemoveTeam={scenario.teams.length > 1}
-                        teamEditingDisabled={Boolean(dragState) || Boolean(scenarioReorder)}
-                        onNameChange={(value) => {
-                          updateScenarioTeamDraftName(scenario.id, team.id, value);
-                          scheduleScenarioTeamNameCommit(scenario.id, team.id);
-                        }}
+                            teamNameError={scenarioTeamNameErrors[teamIndex] ?? null}
+                            draftName={scenarioDraftTeams[teamIndex]?.name ?? team.name}
+                            draftColor={scenarioDraftTeams[teamIndex]?.color ?? team.color}
+                            forceTwoLineName={scenarioForceTwoLineNames}
+                            canRemoveTeam={scenario.teams.length > 1}
+                            teamEditingDisabled={Boolean(dragState) || Boolean(scenarioReorder)}
+                            onNameWrapChange={(teamId, isWrapped) =>
+                              setScenarioWrappedTeamNames((current) => {
+                                const currentScenario = current[scenario.id] ?? {};
+                                if ((currentScenario[teamId] ?? false) === isWrapped) {
+                                  return current;
+                                }
+
+                                return {
+                                  ...current,
+                                  [scenario.id]: {
+                                    ...currentScenario,
+                                    [teamId]: isWrapped
+                                  }
+                                };
+                              })
+                            }
+                            onNameChange={(value) => {
+                              updateScenarioTeamDraftName(scenario.id, team.id, value);
+                              scheduleScenarioTeamNameCommit(scenario.id, team.id);
+                            }}
                         onNameCommit={(options) => {
                           const key = getScenarioTeamCommitKey(scenario.id, team.id, "name");
                           const pendingTimeout = scenarioTeamCommitTimeoutsRef.current.get(key);
@@ -5088,6 +5184,8 @@ function TeamsContent() {
                       </button>
                     ) : null}
                   </div>
+                  </div>
+                  </div>
                   <ScenarioAnalyticsSection
                     analyticsMode={analyticsMode}
                     charts={scenarioCharts}
@@ -5180,7 +5278,7 @@ function TeamsContent() {
                       </svg>
                     </div>
                     <div className="scenario-toggle collapsed" aria-hidden="true" tabIndex={-1}>
-                      <span className="scenario-toggle-icon" />
+                      <ScenarioToggleIcon collapsed />
                     </div>
                   </div>
                 </div>
@@ -5240,8 +5338,10 @@ function TeamColumn({
   teamNameError,
   draftName,
   draftColor,
+  forceTwoLineName,
   canRemoveTeam,
   teamEditingDisabled,
+  onNameWrapChange,
   onNameChange,
   onNameCommit,
   onRemoveTeam,
@@ -5269,8 +5369,10 @@ function TeamColumn({
   teamNameError: string | null;
   draftName: string;
   draftColor: string;
+  forceTwoLineName: boolean;
   canRemoveTeam: boolean;
   teamEditingDisabled: boolean;
+  onNameWrapChange: (teamId: string, isWrapped: boolean) => void;
   onNameChange: (value: string) => void;
   onNameCommit: (options?: { immediate?: boolean }) => void;
   onRemoveTeam: () => void;
@@ -5308,14 +5410,27 @@ function TeamColumn({
     const borderBottomWidth = Number.parseFloat(computedStyle.borderBottomWidth) || 0;
     const minHeight = lineHeight + paddingTop + paddingBottom + borderBottomWidth;
     const maxHeight = lineHeight * 2 + paddingTop + paddingBottom + borderBottomWidth;
+    const updateHeight = () => {
+      node.style.height = "0px";
+      const measuredHeight = Math.min(Math.max(node.scrollHeight, minHeight), maxHeight);
+      const isWrapped = measuredHeight > minHeight + 1;
+      onNameWrapChange(team.id, isWrapped);
+      node.style.height = `${forceTwoLineName ? maxHeight : measuredHeight}px`;
+    };
 
-    node.style.height = "0px";
-    node.style.height = `${Math.min(Math.max(node.scrollHeight, minHeight), maxHeight)}px`;
-  }, [draftName]);
+    updateHeight();
+
+    const resizeObserver = new ResizeObserver(() => {
+      updateHeight();
+    });
+    resizeObserver.observe(node);
+
+    return () => resizeObserver.disconnect();
+  }, [draftName, forceTwoLineName, onNameWrapChange, team.id]);
 
   return (
     <section className="team-card">
-      <div className="team-name team-name-editor">
+      <div className={`team-name team-name-editor${forceTwoLineName ? " force-two-line" : ""}`}>
         <div className="team-name-edit-row">
           <textarea
             ref={nameInputRef}
@@ -5328,46 +5443,48 @@ function TeamColumn({
             disabled={teamEditingDisabled}
             rows={1}
           />
-          <button
-            type="button"
-            className="team-config-remove-button team-inline-icon-button team-inline-rename-button"
-            onClick={onRenameTeam}
-            disabled={teamEditingDisabled}
-            aria-label={`Generate a new name for ${teamLabel}`}
-            title="Generate team name"
-          >
-            <img
-              aria-hidden="true"
-              alt=""
-              src="/team-name-shuffle.png"
-              className="team-inline-icon-image"
-            />
-          </button>
-          <label className="team-config-color-row">
-            <input
-              type="color"
-              className="team-config-color-input"
-              value={draftColor}
-              onChange={(event) => onColorChange(event.target.value)}
-              onBlur={() => onColorCommit({ immediate: true })}
+          <div className="team-name-controls">
+            <button
+              type="button"
+              className="team-config-remove-button team-inline-icon-button team-inline-rename-button"
+              onClick={onRenameTeam}
               disabled={teamEditingDisabled}
-            />
-          </label>
-          <button
-            type="button"
-            className="team-config-remove-button team-inline-icon-button team-inline-remove-button"
-            onClick={onRemoveTeam}
-            disabled={!canRemoveTeam || teamEditingDisabled}
-            aria-label={`Remove ${teamLabel}`}
-            title="Remove team"
-          >
-            <img
-              aria-hidden="true"
-              alt=""
-              src="/team-remove-trash.png"
-              className="team-inline-icon-image"
-            />
-          </button>
+              aria-label={`Generate a new name for ${teamLabel}`}
+              title="Generate team name"
+            >
+              <img
+                aria-hidden="true"
+                alt=""
+                src="/team-name-shuffle.png"
+                className="team-inline-icon-image"
+              />
+            </button>
+            <label className="team-config-color-row">
+              <input
+                type="color"
+                className="team-config-color-input"
+                value={draftColor}
+                onChange={(event) => onColorChange(event.target.value)}
+                onBlur={() => onColorCommit({ immediate: true })}
+                disabled={teamEditingDisabled}
+              />
+            </label>
+            <button
+              type="button"
+              className="team-config-remove-button team-inline-icon-button team-inline-remove-button"
+              onClick={onRemoveTeam}
+              disabled={!canRemoveTeam || teamEditingDisabled}
+              aria-label={`Remove ${teamLabel}`}
+              title="Remove team"
+            >
+              <img
+                aria-hidden="true"
+                alt=""
+                src="/team-remove-trash.png"
+                className="team-inline-icon-image"
+              />
+            </button>
+          </div>
         </div>
         {teamNameError ? <div className="team-inline-error">{teamNameError}</div> : null}
       </div>

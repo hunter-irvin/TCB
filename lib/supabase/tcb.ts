@@ -372,7 +372,7 @@ export function buildScenarioState(
         title: scenario.title || `Team Scenario ${index + 1}`,
         teams,
         assignments: buildAssignmentsFromRows(assignmentRowsByScenario.get(scenario.id) ?? [], teams),
-        collapsed: collapsedById.get(scenario.id) ?? false
+        collapsed: collapsedById.get(scenario.id) ?? true
       };
     });
 }
