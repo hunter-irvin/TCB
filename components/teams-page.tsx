@@ -36,12 +36,12 @@ import { generateScenarioTeamName } from "@/lib/team-name-generator";
 import {
   buildMatchupScoreLookup,
   buildScenarioMatchupReport,
-  findBestScenarioMatchupSwapSuggestions,
+  findScenarioMatchupSwapSuggestionOptions,
   type MatchupScoreLookup,
   type TeamMatchupChosenPair,
   type ScenarioMatchupReport,
   type ScenarioMatchupSwapSuggestion,
-  type ScenarioMatchupSwapSuggestions,
+  type ScenarioMatchupSwapSuggestionOptions,
   type TeamMatchupDirectionalEdge
 } from "@/lib/team-matchup-balance";
 import {
@@ -252,6 +252,11 @@ type ScenarioStatsTradeSuggestion = {
   nextTotalSubcategoryRange: number;
 };
 
+type ScenarioStatsTradeSuggestionOptions = {
+  goal1: ScenarioStatsTradeSuggestion[];
+  goal2: ScenarioStatsTradeSuggestion[];
+};
+
 type ScenarioStatsBalancerReport = {
   completeTeams: Team[];
   currentOverallRangeScore: number;
@@ -259,14 +264,32 @@ type ScenarioStatsBalancerReport = {
   currentMaxSubcategoryRange: number;
   currentMaxSubcategoryLabel: string;
   currentTotalSubcategoryRange: number;
+  goal1Suggestions: ScenarioStatsTradeSuggestion[];
+  goal2Suggestions: ScenarioStatsTradeSuggestion[];
   goal1Suggestion: ScenarioStatsTradeSuggestion | null;
   goal2Suggestion: ScenarioStatsTradeSuggestion | null;
 };
+
+type ScenarioSuggestionCursorKey =
+  | "matchupGoal1"
+  | "matchupGoal2"
+  | "matchupGoal3"
+  | "statsGoal1"
+  | "statsGoal2";
+
+type ScenarioSuggestionCursorState = Record<
+  string,
+  Partial<Record<ScenarioSuggestionCursorKey, number>>
+>;
 
 const SCENARIO_CHART_TOP_PADDING = 10;
 const TEAM_SYNC_DEBOUNCE_MS = 1000;
 const SCENARIO_STATS_V2_GROUP_COLUMN_WIDTH = 64;
 const SCENARIO_STATS_V2_LABEL_COLUMN_WIDTH = 190;
+const SCENARIO_STATS_V2_CATEGORY_MIN_SCALE_LIMIT = 7;
+const SCENARIO_STATS_V2_OVERALL_MIN_SCALE_LIMIT = 10;
+const MATCHUP_ADVANTAGE_MIN_SCALE_LIMIT = 2;
+const MATCHUP_ADVANTAGE_TRACK_EDGE_GUTTER = 2;
 const SCENARIO_STATS_BALANCER_GOAL1_LIMIT = 40;
 const SCENARIO_STATS_BALANCER_GOAL2_LIMIT = 15;
 const SCENARIO_SUBCATEGORY_ATTRIBUTES = PLAYER_ATTRIBUTE_GROUPS.reduce<
@@ -732,6 +755,75 @@ function buildScenarioStatsTradeSuggestionKey(suggestion: ScenarioStatsTradeSugg
   ].join(":");
 }
 
+function createEmptyScenarioStatsTradeSuggestionOptions(): ScenarioStatsTradeSuggestionOptions {
+  return {
+    goal1: [],
+    goal2: []
+  };
+}
+
+function compareScenarioStatsTradeSuggestionsForGoal(
+  goal: "goal1" | "goal2",
+  left: ScenarioStatsTradeSuggestion,
+  right: ScenarioStatsTradeSuggestion
+) {
+  if (goal === "goal1") {
+    if (left.nextOverallRangeScore !== right.nextOverallRangeScore) {
+      return left.nextOverallRangeScore - right.nextOverallRangeScore;
+    }
+
+    if (left.nextOverallScore !== right.nextOverallScore) {
+      return left.nextOverallScore - right.nextOverallScore;
+    }
+  } else {
+    if (left.nextMaxSubcategoryRange !== right.nextMaxSubcategoryRange) {
+      return left.nextMaxSubcategoryRange - right.nextMaxSubcategoryRange;
+    }
+
+    if (left.nextTotalSubcategoryRange !== right.nextTotalSubcategoryRange) {
+      return left.nextTotalSubcategoryRange - right.nextTotalSubcategoryRange;
+    }
+  }
+
+  return buildScenarioStatsTradeSuggestionKey(left).localeCompare(
+    buildScenarioStatsTradeSuggestionKey(right)
+  );
+}
+
+function clampScenarioSuggestionIndex(index: number | undefined, suggestionCount: number) {
+  if (suggestionCount <= 0) {
+    return 0;
+  }
+
+  return Math.min(index ?? 0, suggestionCount - 1);
+}
+
+function buildScenarioSuggestionHelperText(
+  content: ReactNode,
+  options?: {
+    onNext?: (() => void) | null;
+    nextAriaLabel?: string;
+  }
+): ReactNode {
+  if (!options?.onNext) {
+    return content;
+  }
+
+  return (
+    <>
+      {content}{" "}
+      <button
+        type="button"
+        className="available-feedback-link"
+        onClick={options.onNext}
+        aria-label={options.nextAriaLabel ?? "Show next suggestion"}
+      >
+        Next -&gt;
+      </button>
+    </>
+  );
+}
+
 function buildScenarioStatsBalancerReport(
   assignments: Assignments,
   teams: Team[],
@@ -755,8 +847,7 @@ function buildScenarioStatsBalancerReport(
           totalRangeSum: 0
         };
 
-  let goal1Suggestion: ScenarioStatsTradeSuggestion | null = null;
-  let goal2Suggestion: ScenarioStatsTradeSuggestion | null = null;
+  const suggestionOptions = createEmptyScenarioStatsTradeSuggestionOptions();
 
   if (completeTeams.length >= 2) {
     for (let leftIndex = 0; leftIndex < completeTeams.length; leftIndex += 1) {
@@ -826,39 +917,24 @@ function buildScenarioStatsBalancerReport(
             };
 
             if (nextOverallRangeScore < currentOverallRangeScore) {
-              if (
-                !goal1Suggestion ||
-                nextOverallRangeScore < goal1Suggestion.nextOverallRangeScore ||
-                (nextOverallRangeScore === goal1Suggestion.nextOverallRangeScore &&
-                  nextOverallScore < goal1Suggestion.nextOverallScore) ||
-                (nextOverallRangeScore === goal1Suggestion.nextOverallRangeScore &&
-                  nextOverallScore === goal1Suggestion.nextOverallScore &&
-                  buildScenarioStatsTradeSuggestionKey(candidateSuggestion) <
-                    buildScenarioStatsTradeSuggestionKey(goal1Suggestion))
-              ) {
-                goal1Suggestion = candidateSuggestion;
-              }
+              suggestionOptions.goal1.push(candidateSuggestion);
             }
 
             if (nextSubcategorySummary.maxRange < currentSubcategorySummary.maxRange) {
-              if (
-                !goal2Suggestion ||
-                nextSubcategorySummary.maxRange < goal2Suggestion.nextMaxSubcategoryRange ||
-                (nextSubcategorySummary.maxRange === goal2Suggestion.nextMaxSubcategoryRange &&
-                  nextSubcategorySummary.totalRangeSum < goal2Suggestion.nextTotalSubcategoryRange) ||
-                (nextSubcategorySummary.maxRange === goal2Suggestion.nextMaxSubcategoryRange &&
-                  nextSubcategorySummary.totalRangeSum === goal2Suggestion.nextTotalSubcategoryRange &&
-                  buildScenarioStatsTradeSuggestionKey(candidateSuggestion) <
-                    buildScenarioStatsTradeSuggestionKey(goal2Suggestion))
-              ) {
-                goal2Suggestion = candidateSuggestion;
-              }
+              suggestionOptions.goal2.push(candidateSuggestion);
             }
           }
         }
       }
     }
   }
+
+  suggestionOptions.goal1.sort((left, right) =>
+    compareScenarioStatsTradeSuggestionsForGoal("goal1", left, right)
+  );
+  suggestionOptions.goal2.sort((left, right) =>
+    compareScenarioStatsTradeSuggestionsForGoal("goal2", left, right)
+  );
 
   return {
     completeTeams,
@@ -867,8 +943,10 @@ function buildScenarioStatsBalancerReport(
     currentMaxSubcategoryRange: currentSubcategorySummary.maxRange,
     currentMaxSubcategoryLabel: currentSubcategorySummary.maxLabel,
     currentTotalSubcategoryRange: currentSubcategorySummary.totalRangeSum,
-    goal1Suggestion,
-    goal2Suggestion
+    goal1Suggestions: suggestionOptions.goal1,
+    goal2Suggestions: suggestionOptions.goal2,
+    goal1Suggestion: suggestionOptions.goal1[0] ?? null,
+    goal2Suggestion: suggestionOptions.goal2[0] ?? null
   };
 }
 
@@ -2135,6 +2213,8 @@ function TeamsContent() {
     error: null,
     data: null
   });
+  const [scenarioSuggestionCursorState, setScenarioSuggestionCursorState] =
+    useState<ScenarioSuggestionCursorState>({});
   const [analyticsModeByScenario, setAnalyticsModeByScenario] = useState<
     Record<string, ScenarioAnalyticsMode>
   >({});
@@ -2202,7 +2282,7 @@ function TeamsContent() {
       ) as Record<string, ScenarioMatchupReport>,
     [matchupLookup, scenarios]
   );
-  const scenarioMatchupSwapSuggestions = useMemo(
+  const scenarioMatchupSwapSuggestionOptions = useMemo(
     () =>
       Object.fromEntries(
         scenarios.map((scenario) => {
@@ -2212,21 +2292,21 @@ function TeamsContent() {
           return [
             scenario.id,
             isComplete
-              ? findBestScenarioMatchupSwapSuggestions(
+              ? findScenarioMatchupSwapSuggestionOptions(
                   scenario.assignments,
                   scenario.teams,
                   playerById,
                   matchupLookup,
                   scenarioMatchupReports[scenario.id]
                 )
-              : {
-                  goal1: null,
-                  goal2: null,
-                  goal3: null
+                : {
+                  goal1: [],
+                  goal2: [],
+                  goal3: []
                 }
           ] as const;
         })
-      ) as Record<string, ScenarioMatchupSwapSuggestions>,
+      ) as Record<string, ScenarioMatchupSwapSuggestionOptions>,
     [matchupLookup, playerById, scenarioMatchupReports, scenarios]
   );
   const scenarioStatsBalancerReports = useMemo(
@@ -2245,8 +2325,38 @@ function TeamsContent() {
   }, [scenarios]);
 
   useEffect(() => {
+    setScenarioSuggestionCursorState({});
+  }, [scenarios]);
+
+  useEffect(() => {
     scenarioTeamDraftsRef.current = scenarioTeamDrafts;
   }, [scenarioTeamDrafts]);
+
+  const showNextScenarioSuggestion = useCallback(
+    (scenarioId: string, goalKey: ScenarioSuggestionCursorKey, suggestionCount: number) => {
+      if (suggestionCount <= 1) {
+        return;
+      }
+
+      setScenarioSuggestionCursorState((current) => {
+        const currentScenario = current[scenarioId] ?? {};
+        const currentIndex = clampScenarioSuggestionIndex(currentScenario[goalKey], suggestionCount);
+        const nextIndex = Math.min(currentIndex + 1, suggestionCount - 1);
+        if (nextIndex === currentIndex) {
+          return current;
+        }
+
+        return {
+          ...current,
+          [scenarioId]: {
+            ...currentScenario,
+            [goalKey]: nextIndex
+          }
+        };
+      });
+    },
+    []
+  );
 
   useEffect(() => {
     latestScenariosRef.current = scenarios;
@@ -4592,41 +4702,121 @@ function TeamsContent() {
           const analyticsMode = analyticsModeByScenario[scenario.id] ?? "matchup";
           const isScenarioComplete =
             countFilledAssignments(scenario.assignments) === scenario.teams.length * POSITIONS.length;
-          const swapSuggestions = scenarioMatchupSwapSuggestions[scenario.id] ?? {
-            goal1: null,
-            goal2: null,
-            goal3: null
+          const swapSuggestionOptions = scenarioMatchupSwapSuggestionOptions[scenario.id] ?? {
+            goal1: [],
+            goal2: [],
+            goal3: []
           };
-          const goal1SwapSuggestionText = buildScenarioSwapHelperText(
-            "Goal 1",
-            swapSuggestions.goal1,
-            isScenarioComplete,
-            playerById
+          const suggestionCursors = scenarioSuggestionCursorState[scenario.id] ?? {};
+          const goal1SwapSuggestionIndex = clampScenarioSuggestionIndex(
+            suggestionCursors.matchupGoal1,
+            swapSuggestionOptions.goal1.length
           );
-          const goal2SwapSuggestionText = buildScenarioSwapHelperText(
-            "Goal 2",
-            swapSuggestions.goal2,
-            isScenarioComplete,
-            playerById
+          const goal2SwapSuggestionIndex = clampScenarioSuggestionIndex(
+            suggestionCursors.matchupGoal2,
+            swapSuggestionOptions.goal2.length
           );
-          const goal3SwapSuggestionText = buildScenarioSwapHelperText(
-            "Goal 3",
-            swapSuggestions.goal3,
-            isScenarioComplete,
-            playerById
+          const goal3SwapSuggestionIndex = clampScenarioSuggestionIndex(
+            suggestionCursors.matchupGoal3,
+            swapSuggestionOptions.goal3.length
           );
+          const goal1SwapSuggestion = swapSuggestionOptions.goal1[goal1SwapSuggestionIndex] ?? null;
+          const goal2SwapSuggestion = swapSuggestionOptions.goal2[goal2SwapSuggestionIndex] ?? null;
+          const goal3SwapSuggestion = swapSuggestionOptions.goal3[goal3SwapSuggestionIndex] ?? null;
+          const goal1SwapSuggestionText = buildScenarioSuggestionHelperText(
+            buildScenarioSwapHelperText("Goal 1", goal1SwapSuggestion, isScenarioComplete, playerById),
+            goal1SwapSuggestionIndex + 1 < swapSuggestionOptions.goal1.length
+              ? {
+                  onNext: () =>
+                    showNextScenarioSuggestion(
+                      scenario.id,
+                      "matchupGoal1",
+                      swapSuggestionOptions.goal1.length
+                    ),
+                  nextAriaLabel: "Show next Goal 1 matchup trade suggestion"
+                }
+              : undefined
+          );
+          const goal2SwapSuggestionText = buildScenarioSuggestionHelperText(
+            buildScenarioSwapHelperText("Goal 2", goal2SwapSuggestion, isScenarioComplete, playerById),
+            goal2SwapSuggestionIndex + 1 < swapSuggestionOptions.goal2.length
+              ? {
+                  onNext: () =>
+                    showNextScenarioSuggestion(
+                      scenario.id,
+                      "matchupGoal2",
+                      swapSuggestionOptions.goal2.length
+                    ),
+                  nextAriaLabel: "Show next Goal 2 matchup trade suggestion"
+                }
+              : undefined
+          );
+          const goal3SwapSuggestionText = buildScenarioSuggestionHelperText(
+            buildScenarioSwapHelperText("Goal 3", goal3SwapSuggestion, isScenarioComplete, playerById),
+            goal3SwapSuggestionIndex + 1 < swapSuggestionOptions.goal3.length
+              ? {
+                  onNext: () =>
+                    showNextScenarioSuggestion(
+                      scenario.id,
+                      "matchupGoal3",
+                      swapSuggestionOptions.goal3.length
+                    ),
+                  nextAriaLabel: "Show next Goal 3 matchup trade suggestion"
+                }
+              : undefined
+          );
+          const goal1StatsSuggestionIndex = clampScenarioSuggestionIndex(
+            suggestionCursors.statsGoal1,
+            scenarioStatsBalancerReport.goal1Suggestions.length
+          );
+          const goal2StatsSuggestionIndex = clampScenarioSuggestionIndex(
+            suggestionCursors.statsGoal2,
+            scenarioStatsBalancerReport.goal2Suggestions.length
+          );
+          const goal1StatsSuggestion =
+            scenarioStatsBalancerReport.goal1Suggestions[goal1StatsSuggestionIndex] ?? null;
+          const goal2StatsSuggestion =
+            scenarioStatsBalancerReport.goal2Suggestions[goal2StatsSuggestionIndex] ?? null;
           const goal1StatsTradeHelperText = buildScenarioStatsTradeHelperText(
             "goal 1",
-            scenarioStatsBalancerReport.goal1Suggestion,
+            goal1StatsSuggestion,
             scenarioStatsBalancerReport.completeTeams.length,
             playerById
           );
           const goal2StatsCategoryHelperText =
             buildScenarioStatsCategoryHelperText(scenarioStatsBalancerReport);
+          const goal1StatsTradeHelperNode = buildScenarioSuggestionHelperText(
+            goal1StatsTradeHelperText,
+            goal1StatsSuggestionIndex + 1 < scenarioStatsBalancerReport.goal1Suggestions.length
+              ? {
+                  onNext: () =>
+                    showNextScenarioSuggestion(
+                      scenario.id,
+                      "statsGoal1",
+                      scenarioStatsBalancerReport.goal1Suggestions.length
+                    ),
+                  nextAriaLabel: "Show next Goal 1 stats trade suggestion"
+                }
+              : undefined
+          );
           const goal2StatsTradeHelperText = buildScenarioStatsGoal2TradeHelperText(
             scenarioStatsBalancerReport,
-            scenarioStatsBalancerReport.goal2Suggestion,
+            goal2StatsSuggestion,
             playerById
+          );
+          const goal2StatsTradeHelperNode = buildScenarioSuggestionHelperText(
+            goal2StatsTradeHelperText,
+            goal2StatsSuggestionIndex + 1 < scenarioStatsBalancerReport.goal2Suggestions.length
+              ? {
+                  onNext: () =>
+                    showNextScenarioSuggestion(
+                      scenario.id,
+                      "statsGoal2",
+                      scenarioStatsBalancerReport.goal2Suggestions.length
+                    ),
+                  nextAriaLabel: "Show next Goal 2 stats trade suggestion"
+                }
+              : undefined
           );
           const scenarioCollapsed = Boolean(scenarioReorder) || scenario.collapsed;
           const scenarioIsDragging = scenarioReorder?.scenarioId === scenario.id;
@@ -5192,9 +5382,9 @@ function TeamsContent() {
                     categoryAdvantageRows={scenarioCategoryAdvantageRows}
                     incompleteTeamIds={scenarioIncompleteTeamIds}
                     statsBalancerReport={scenarioStatsBalancerReport}
-                    goal1StatsTradeHelperText={goal1StatsTradeHelperText}
+                    goal1StatsTradeHelperText={goal1StatsTradeHelperNode}
                     goal2StatsCategoryHelperText={goal2StatsCategoryHelperText}
-                    goal2StatsTradeHelperText={goal2StatsTradeHelperText}
+                    goal2StatsTradeHelperText={goal2StatsTradeHelperNode}
                     matchupReport={scenarioMatchupReport}
                     goal1SwapHelperText={goal1SwapSuggestionText}
                     goal2SwapHelperText={goal2SwapSuggestionText}
@@ -5666,7 +5856,7 @@ function getCategoryAdvantageScaleLimit(rows: ScenarioCategoryAdvantageRow[]) {
     );
   }, 0);
 
-  return Math.max(1, Math.ceil(maxMagnitude));
+  return Math.max(SCENARIO_STATS_V2_CATEGORY_MIN_SCALE_LIMIT, Math.ceil(maxMagnitude));
 }
 
 function buildScenarioOverallCategoryAdvantageRow(
@@ -5903,7 +6093,7 @@ function ScenarioStatsTeamBalancerCard({
   goal2StatsTradeHelperText
 }: {
   report: ScenarioStatsBalancerReport;
-  goal1StatsTradeHelperText: string;
+  goal1StatsTradeHelperText: ReactNode;
   goal2StatsCategoryHelperText: ReactNode;
   goal2StatsTradeHelperText: ReactNode;
 }) {
@@ -5986,7 +6176,7 @@ function ScenarioStatsComparison2({
   categoryAdvantageRows: ScenarioCategoryAdvantageRow[];
   incompleteTeamIds: string[];
   statsBalancerReport: ScenarioStatsBalancerReport;
-  goal1StatsTradeHelperText: string;
+  goal1StatsTradeHelperText: ReactNode;
   goal2StatsCategoryHelperText: ReactNode;
   goal2StatsTradeHelperText: ReactNode;
   teams: Team[];
@@ -5994,7 +6184,7 @@ function ScenarioStatsComparison2({
   const scaleLimit = getCategoryAdvantageScaleLimit(categoryAdvantageRows);
   const overallRow = buildScenarioOverallCategoryAdvantageRow(categoryAdvantageRows, teams);
   const overallScaleLimit = Math.max(
-    1,
+    SCENARIO_STATS_V2_OVERALL_MIN_SCALE_LIMIT,
     Math.ceil(
       overallRow.cells.reduce((currentMax, cell) => Math.max(currentMax, Math.abs(cell.advantage)), 0)
     )
@@ -6172,7 +6362,7 @@ function ScenarioCombinedStatsComparison({
   categoryAdvantageRows: ScenarioCategoryAdvantageRow[];
   incompleteTeamIds: string[];
   statsBalancerReport: ScenarioStatsBalancerReport;
-  goal1StatsTradeHelperText: string;
+  goal1StatsTradeHelperText: ReactNode;
   goal2StatsCategoryHelperText: ReactNode;
   goal2StatsTradeHelperText: ReactNode;
   teams: Team[];
@@ -6404,13 +6594,13 @@ function ScenarioAnalyticsSection({
   categoryAdvantageRows: ScenarioCategoryAdvantageRow[];
   incompleteTeamIds: string[];
   statsBalancerReport: ScenarioStatsBalancerReport;
-  goal1StatsTradeHelperText: string;
+  goal1StatsTradeHelperText: ReactNode;
   goal2StatsCategoryHelperText: ReactNode;
   goal2StatsTradeHelperText: ReactNode;
   matchupReport: ScenarioMatchupReport;
-  goal1SwapHelperText: string;
-  goal2SwapHelperText: string;
-  goal3SwapHelperText: string;
+  goal1SwapHelperText: ReactNode;
+  goal2SwapHelperText: ReactNode;
+  goal3SwapHelperText: ReactNode;
   playersById: ReadonlyMap<number, Player>;
   teams: Team[];
   onAnalyticsModeChange: (mode: ScenarioAnalyticsMode) => void;
@@ -6476,9 +6666,9 @@ function ScenarioMatchupCharts({
   teams
 }: {
   report: ScenarioMatchupReport;
-  goal1SwapHelperText: string;
-  goal2SwapHelperText: string;
-  goal3SwapHelperText: string;
+  goal1SwapHelperText: ReactNode;
+  goal2SwapHelperText: ReactNode;
+  goal3SwapHelperText: ReactNode;
   playersById: ReadonlyMap<number, Player>;
   teams: Team[];
 }) {
@@ -6606,9 +6796,9 @@ function OptimizationResultsCard({
   teams
 }: {
   report: ScenarioMatchupReport;
-  goal1SwapHelperText: string;
-  goal2SwapHelperText: string;
-  goal3SwapHelperText: string;
+  goal1SwapHelperText: ReactNode;
+  goal2SwapHelperText: ReactNode;
+  goal3SwapHelperText: ReactNode;
   teams: Team[];
 }) {
   const teamPairCount = (teams.length * (teams.length - 1)) / 2;
@@ -6960,19 +7150,27 @@ function OverallMatchupBarChart({
     teams: Team[];
   }) {
     const totalsByTeamId = new Map(report.teamNetAdvantages.map((team) => [team.teamId, team] as const));
-    const OVERALL_MATCHUP_SCALE_LIMIT = 5;
-    const scale = 50 / OVERALL_MATCHUP_SCALE_LIMIT;
+    const metricsByTeam = teams.map((team) => [
+      { key: "overall", label: "OVR", value: totalsByTeamId.get(team.id)?.overall ?? 0 },
+      { key: "offense", label: "OFF", value: totalsByTeamId.get(team.id)?.offense ?? 0 },
+      { key: "defense", label: "DEF", value: totalsByTeamId.get(team.id)?.defense ?? 0 }
+    ] as const);
+    const scaleLimit = Math.max(
+      MATCHUP_ADVANTAGE_MIN_SCALE_LIMIT,
+      Math.ceil(
+        metricsByTeam.reduce(
+          (currentMax, metrics) =>
+            metrics.reduce((metricMax, metric) => Math.max(metricMax, Math.abs(metric.value)), currentMax),
+          0
+        )
+      )
+    );
 
     return (
       <div className="scenario-matchup-overall-shell">
         <div className="scenario-matchup-overall-chart" role="img" aria-label="Overall team net matchup advantage bar chart">
           {teams.map((team, index) => {
-            const totals = totalsByTeamId.get(team.id);
-            const metrics = [
-              { key: "overall", label: "OVR", value: totals?.overall ?? 0 },
-              { key: "offense", label: "OFF", value: totals?.offense ?? 0 },
-              { key: "defense", label: "DEF", value: totals?.defense ?? 0 }
-            ] as const;
+            const metrics = metricsByTeam[index] ?? [];
 
             return (
               <div key={team.id} className="scenario-matchup-overall-row">
@@ -6983,33 +7181,14 @@ function OverallMatchupBarChart({
                 </div>
                 <div className="scenario-matchup-overall-metrics">
                     {metrics.map((metric) => {
-                      const clampedValue = Math.max(
-                        -OVERALL_MATCHUP_SCALE_LIMIT,
-                        Math.min(OVERALL_MATCHUP_SCALE_LIMIT, metric.value)
-                      );
-                      const width = Math.abs(clampedValue) * scale;
-                      const direction = metric.value >= 0 ? "positive" : "negative";
-                      const barStyle = {
-                        width: `${width}%`,
-                        background: team.color,
-                        left: clampedValue >= 0 ? "50%" : `calc(50% - ${width}%)`
-                      };
-
                       return (
-                        <div
+                        <MatchupAdvantageMetricBar
                           key={metric.key}
-                          className={`scenario-matchup-overall-metric scenario-matchup-overall-metric-${metric.key}`}
-                        >
-                          <div className="scenario-matchup-overall-track">
-                            <div className="scenario-matchup-overall-baseline" aria-hidden="true" />
-                            <div className={`scenario-matchup-overall-bar ${direction}`} style={barStyle} />
-                          </div>
-                          <div className={`scenario-matchup-overall-value ${direction}`}>
-                            {metric.value >= 0 ? "+" : ""}
-                            {metric.value.toFixed(2)}
-                          </div>
-                          <div className="scenario-matchup-overall-metric-label">{metric.label}</div>
-                        </div>
+                          metric={metric}
+                          metricClassName={`scenario-matchup-overall-metric scenario-matchup-overall-metric-${metric.key}`}
+                          scaleLimit={scaleLimit}
+                          teamColor={team.color}
+                        />
                       );
                     })}
                 </div>
@@ -7315,6 +7494,72 @@ function TeamMatchupChordDiagram({
           </div>
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function MatchupAdvantageMetricBar({
+  metric,
+  metricClassName,
+  scaleLimit,
+  teamColor
+}: {
+  metric: { key: string; label: string; value: number };
+  metricClassName: string;
+  scaleLimit: number;
+  teamColor: string;
+}) {
+  const [trackRef, trackWidth] = useObservedElementWidth<HTMLDivElement>();
+  const direction = metric.value > 0 ? "positive" : metric.value < 0 ? "negative" : "neutral";
+  const label = `${metric.value >= 0 ? "+" : ""}${metric.value.toFixed(2)}`;
+  const gap = 4;
+  const halfTrackWidth = Math.max(0, trackWidth / 2 - MATCHUP_ADVANTAGE_TRACK_EDGE_GUTTER);
+  const centerX = trackWidth / 2;
+  const barWidth =
+    metric.value === 0
+      ? 0
+      : Math.max(2, (Math.abs(metric.value) / Math.max(scaleLimit, 1)) * halfTrackWidth);
+  const barStyle =
+    direction === "positive"
+      ? {
+          left: `${centerX}px`,
+          width: `${barWidth}px`,
+          background: teamColor
+        }
+      : direction === "negative"
+        ? {
+            left: `${Math.max(0, centerX - barWidth)}px`,
+            width: `${barWidth}px`,
+            background: teamColor
+          }
+        : undefined;
+  const valueStyle =
+    direction === "positive"
+      ? { left: `${Math.max(0, centerX - gap)}px` }
+      : direction === "negative"
+        ? { left: `${Math.min(trackWidth, centerX + gap)}px` }
+        : { left: `${centerX}px` };
+
+  return (
+    <div className={metricClassName}>
+      <div
+        ref={trackRef}
+        className="scenario-matchup-overall-track"
+        aria-label={`${metric.label} advantage ${label}`}
+      >
+        <div className="scenario-matchup-overall-baseline" aria-hidden="true" />
+        {barStyle ? (
+          <div className={`scenario-matchup-overall-bar ${direction}`} style={barStyle} aria-hidden="true" />
+        ) : null}
+        <div
+          className={`scenario-matchup-overall-value scenario-matchup-overall-value-marker ${direction}`}
+          style={valueStyle}
+          aria-hidden="true"
+        >
+          {label}
+        </div>
+      </div>
+      <div className="scenario-matchup-overall-metric-label">{metric.label}</div>
     </div>
   );
 }

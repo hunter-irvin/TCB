@@ -2749,7 +2749,7 @@ select {
 
 .scenario-matchup-overall-metric {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 54px 34px;
+  grid-template-columns: minmax(0, 1fr) 34px;
   gap: 8px;
   align-items: center;
 }
@@ -2766,6 +2766,7 @@ select {
 .scenario-matchup-overall-track {
   position: relative;
   min-height: 18px;
+  overflow: hidden;
 }
 
 .scenario-matchup-overall-bar {
@@ -2781,7 +2782,25 @@ select {
 .scenario-matchup-overall-value {
   font-size: 0.76rem;
   font-weight: 800;
-  text-align: right;
+  white-space: nowrap;
+  z-index: 2;
+}
+
+.scenario-matchup-overall-value-marker {
+  position: absolute;
+  top: 50%;
+}
+
+.scenario-matchup-overall-value-marker.positive {
+  transform: translate(-100%, -50%);
+}
+
+.scenario-matchup-overall-value-marker.negative {
+  transform: translateY(-50%);
+}
+
+.scenario-matchup-overall-value-marker.neutral {
+  transform: translate(-50%, -50%);
 }
 
 .scenario-matchup-overall-value.positive {
@@ -2790,6 +2809,10 @@ select {
 
 .scenario-matchup-overall-value.negative {
   color: #f4a3a3;
+}
+
+.scenario-matchup-overall-value.neutral {
+  color: rgba(248, 250, 252, 0.86);
 }
 
 .scenario-matchup-overall-helper {
@@ -4461,7 +4484,7 @@ select {
   }
 
   .scenario-matchup-overall-metric {
-    grid-template-columns: minmax(0, 1fr) 50px 30px;
+    grid-template-columns: minmax(0, 1fr) 30px;
   }
 
   .matchup-tinder-shell {
