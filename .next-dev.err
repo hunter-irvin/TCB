@@ -1,0 +1,14 @@
+Warning: Ignoring extra certs from `\\uslas0-sec050\PaloAlto\Certificates\ZScaler\Zscaler-RootCert.pem`, load failed: error:80000005:system library::Input/output error
+Error: spawn EPERM
+    at ChildProcess.spawn (node:internal/child_process:440:11)
+    at spawn (node:child_process:796:9)
+    at fork (node:child_process:174:10)
+    at C:\Users\irvinh\OneDrive - Jacobs Engineering Group Inc\Desktop\Repos\TCB\TCB\node_modules\next\dist\cli\next-dev.js:237:45
+    at new Promise (<anonymous>)
+    at startServer (C:\Users\irvinh\OneDrive - Jacobs Engineering Group Inc\Desktop\Repos\TCB\TCB\node_modules\next\dist\cli\next-dev.js:213:16)
+    at runDevServer (C:\Users\irvinh\OneDrive - Jacobs Engineering Group Inc\Desktop\Repos\TCB\TCB\node_modules\next\dist\cli\next-dev.js:322:23)
+    at Module.nextDev (C:\Users\irvinh\OneDrive - Jacobs Engineering Group Inc\Desktop\Repos\TCB\TCB\node_modules\next\dist\cli\next-dev.js:330:11) {
+  errno: -4048,
+  code: 'EPERM',
+  syscall: 'spawn'
+}

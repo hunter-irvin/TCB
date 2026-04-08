@@ -14,7 +14,7 @@ import {
 
 const tabs: Array<{ page: RunPage; label: string }> = [
   { page: "roster", label: "Roster" },
-  { page: "teams", label: "Teams" },
+  { page: "teams", label: "Team Builder" },
   { page: "matchup-tinder", label: "Matchup Tinder" },
   { page: "matchup-visualizer", label: "Matchup Visualizer" }
 ];

@@ -240,6 +240,12 @@ type ScenarioCategoryAdvantageRow = {
   cells: ScenarioCategoryAdvantageCell[];
 };
 
+type ScenarioStatsCategoryImbalance = {
+  key: PlayerAttributeKey;
+  label: string;
+  range: number;
+};
+
 type ScenarioStatsTradeSuggestion = {
   sourceTeamId: string;
   targetTeamId: string;
@@ -247,14 +253,15 @@ type ScenarioStatsTradeSuggestion = {
   targetPlayerId: number;
   nextOverallRangeScore: number;
   nextOverallScore: number;
-  nextMaxSubcategoryRange: number;
-  nextMaxSubcategoryLabel: string;
+  categoryKey: PlayerAttributeKey;
+  categoryLabel: string;
+  nextCategoryRange: number;
   nextTotalSubcategoryRange: number;
 };
 
 type ScenarioStatsTradeSuggestionOptions = {
   goal1: ScenarioStatsTradeSuggestion[];
-  goal2: ScenarioStatsTradeSuggestion[];
+  goal2ByCategory: Partial<Record<PlayerAttributeKey, ScenarioStatsTradeSuggestion[]>>;
 };
 
 type ScenarioStatsBalancerReport = {
@@ -264,10 +271,10 @@ type ScenarioStatsBalancerReport = {
   currentMaxSubcategoryRange: number;
   currentMaxSubcategoryLabel: string;
   currentTotalSubcategoryRange: number;
+  subcategoryRankings: ScenarioStatsCategoryImbalance[];
   goal1Suggestions: ScenarioStatsTradeSuggestion[];
-  goal2Suggestions: ScenarioStatsTradeSuggestion[];
   goal1Suggestion: ScenarioStatsTradeSuggestion | null;
-  goal2Suggestion: ScenarioStatsTradeSuggestion | null;
+  goal2SuggestionsByCategory: Partial<Record<PlayerAttributeKey, ScenarioStatsTradeSuggestion[]>>;
 };
 
 type ScenarioSuggestionCursorKey =
@@ -290,6 +297,14 @@ const SCENARIO_STATS_V2_CATEGORY_MIN_SCALE_LIMIT = 7;
 const SCENARIO_STATS_V2_OVERALL_MIN_SCALE_LIMIT = 10;
 const MATCHUP_ADVANTAGE_MIN_SCALE_LIMIT = 2;
 const MATCHUP_ADVANTAGE_TRACK_EDGE_GUTTER = 2;
+const SCENARIO_LAYOUT_GAP = 8;
+const SCENARIO_POOL_CARD_MIN_WIDTH = 248;
+const SCENARIO_TEAM_CARD_MIN_WIDTH = 180;
+const SCENARIO_ATTRIBUTE_CARD_MIN_WIDTH = 220;
+const SCENARIO_STATS_BALANCER_CARD_MIN_WIDTH = 320;
+const SCENARIO_STATS_TEAM_COLUMN_MIN_WIDTH = 132;
+const SCENARIO_STATS_TABLE_CARD_EXTRA_WIDTH = 24;
+const SCENARIO_MATCHUP_CARD_MIN_WIDTH = 260;
 const SCENARIO_STATS_BALANCER_GOAL1_LIMIT = 40;
 const SCENARIO_STATS_BALANCER_GOAL2_LIMIT = 15;
 const SCENARIO_SUBCATEGORY_ATTRIBUTES = PLAYER_ATTRIBUTE_GROUPS.reduce<
@@ -703,18 +718,24 @@ function buildScenarioSubcategoryImbalanceSummary(
   teams: Team[]
 ) {
   const categoryAdvantageRows = buildScenarioCategoryAdvantageRows(assignments, playersById, teams).filter(
-    (row) => row.key !== "chemistry" && row.missingPlayerNames.length === 0
+    (row): row is ScenarioCategoryAdvantageRow & { key: PlayerAttributeKey } =>
+      row.key !== "chemistry" && row.missingPlayerNames.length === 0
   );
   let maxRange = 0;
   let maxLabel = categoryAdvantageRows[0]?.label ?? SCENARIO_SUBCATEGORY_ATTRIBUTES[0]?.label ?? "Category";
   let totalRangeSum = 0;
+  const rankings: ScenarioStatsCategoryImbalance[] = [];
 
   for (const row of categoryAdvantageRows) {
-    const range = row.cells.reduce(
-      (currentMax, cell) => Math.max(currentMax, Math.abs(cell.advantage)),
-      0
+    const range = roundChartValue(
+      row.cells.reduce((currentMax, cell) => Math.max(currentMax, Math.abs(cell.advantage)), 0)
     );
     totalRangeSum += range;
+    rankings.push({
+      key: row.key,
+      label: row.label,
+      range
+    });
 
     if (range > maxRange) {
       maxRange = range;
@@ -722,10 +743,19 @@ function buildScenarioSubcategoryImbalanceSummary(
     }
   }
 
+  rankings.sort((left, right) => {
+    if (right.range !== left.range) {
+      return right.range - left.range;
+    }
+
+    return left.label.localeCompare(right.label);
+  });
+
   return {
     maxRange: roundChartValue(maxRange),
     maxLabel,
-    totalRangeSum: roundChartValue(totalRangeSum)
+    totalRangeSum: roundChartValue(totalRangeSum),
+    rankings
   };
 }
 
@@ -758,7 +788,7 @@ function buildScenarioStatsTradeSuggestionKey(suggestion: ScenarioStatsTradeSugg
 function createEmptyScenarioStatsTradeSuggestionOptions(): ScenarioStatsTradeSuggestionOptions {
   return {
     goal1: [],
-    goal2: []
+    goal2ByCategory: {}
   };
 }
 
@@ -776,12 +806,20 @@ function compareScenarioStatsTradeSuggestionsForGoal(
       return left.nextOverallScore - right.nextOverallScore;
     }
   } else {
-    if (left.nextMaxSubcategoryRange !== right.nextMaxSubcategoryRange) {
-      return left.nextMaxSubcategoryRange - right.nextMaxSubcategoryRange;
+    if (left.nextCategoryRange !== right.nextCategoryRange) {
+      return left.nextCategoryRange - right.nextCategoryRange;
     }
 
     if (left.nextTotalSubcategoryRange !== right.nextTotalSubcategoryRange) {
       return left.nextTotalSubcategoryRange - right.nextTotalSubcategoryRange;
+    }
+
+    if (left.nextOverallRangeScore !== right.nextOverallRangeScore) {
+      return left.nextOverallRangeScore - right.nextOverallRangeScore;
+    }
+
+    if (left.nextOverallScore !== right.nextOverallScore) {
+      return left.nextOverallScore - right.nextOverallScore;
     }
   }
 
@@ -796,6 +834,48 @@ function clampScenarioSuggestionIndex(index: number | undefined, suggestionCount
   }
 
   return Math.min(index ?? 0, suggestionCount - 1);
+}
+
+function getScenarioStatsTableMinWidth(teamCount: number) {
+  return (
+    SCENARIO_STATS_V2_GROUP_COLUMN_WIDTH +
+    SCENARIO_STATS_V2_LABEL_COLUMN_WIDTH +
+    Math.max(teamCount, 1) * SCENARIO_STATS_TEAM_COLUMN_MIN_WIDTH
+  );
+}
+
+function getScenarioStatsSectionStyle(teamCount: number) {
+  const tableMinWidth = getScenarioStatsTableMinWidth(teamCount);
+  const tableCardMinWidth = tableMinWidth + SCENARIO_STATS_TABLE_CARD_EXTRA_WIDTH;
+
+  return {
+    minWidth: `${SCENARIO_STATS_BALANCER_CARD_MIN_WIDTH + SCENARIO_LAYOUT_GAP + tableCardMinWidth}px`,
+    gridTemplateColumns: `minmax(${SCENARIO_STATS_BALANCER_CARD_MIN_WIDTH}px, 0.95fr) minmax(${tableCardMinWidth}px, 1.85fr)`
+  } as const;
+}
+
+function getScenarioCardMinWidth(teamCount: number) {
+  const visibleTeamColumns = Math.min(
+    Math.max(teamCount, 1) + (teamCount < MAX_TEAMS ? 1 : 0),
+    MAX_TEAMS
+  );
+  const setupWidth =
+    SCENARIO_POOL_CARD_MIN_WIDTH +
+    SCENARIO_LAYOUT_GAP +
+    visibleTeamColumns * SCENARIO_TEAM_CARD_MIN_WIDTH +
+    Math.max(visibleTeamColumns - 1, 0) * SCENARIO_LAYOUT_GAP;
+  const statsWidth =
+    SCENARIO_STATS_BALANCER_CARD_MIN_WIDTH +
+    SCENARIO_LAYOUT_GAP +
+    getScenarioStatsTableMinWidth(teamCount) +
+    SCENARIO_STATS_TABLE_CARD_EXTRA_WIDTH;
+  const attributeChartsWidth =
+    4 * SCENARIO_ATTRIBUTE_CARD_MIN_WIDTH + 3 * SCENARIO_LAYOUT_GAP;
+  const matchupWidth =
+    (teamCount >= 2 ? 4 : 1) * SCENARIO_MATCHUP_CARD_MIN_WIDTH +
+    (teamCount >= 2 ? 3 : 0) * SCENARIO_LAYOUT_GAP;
+
+  return Math.max(setupWidth, statsWidth, attributeChartsWidth, matchupWidth);
 }
 
 function buildScenarioSuggestionHelperText(
@@ -844,10 +924,14 @@ function buildScenarioStatsBalancerReport(
       : {
           maxRange: 0,
           maxLabel: SCENARIO_SUBCATEGORY_ATTRIBUTES[0]?.label ?? "Category",
-          totalRangeSum: 0
+          totalRangeSum: 0,
+          rankings: []
         };
 
   const suggestionOptions = createEmptyScenarioStatsTradeSuggestionOptions();
+  const currentRangeByCategoryKey = new Map(
+    currentSubcategorySummary.rankings.map((ranking) => [ranking.key, ranking.range] as const)
+  );
 
   if (completeTeams.length >= 2) {
     for (let leftIndex = 0; leftIndex < completeTeams.length; leftIndex += 1) {
@@ -904,24 +988,52 @@ function buildScenarioStatsBalancerReport(
               playersById,
               completeTeams
             );
-            const candidateSuggestion: ScenarioStatsTradeSuggestion = {
-              sourceTeamId: leftTeam.id,
-              targetTeamId: rightTeam.id,
-              sourcePlayerId: leftPlayerId,
-              targetPlayerId: rightPlayerId,
-              nextOverallRangeScore,
-              nextOverallScore,
-              nextMaxSubcategoryRange: nextSubcategorySummary.maxRange,
-              nextMaxSubcategoryLabel: nextSubcategorySummary.maxLabel,
-              nextTotalSubcategoryRange: nextSubcategorySummary.totalRangeSum
-            };
+            const nextRangeByCategoryKey = new Map(
+              nextSubcategorySummary.rankings.map((ranking) => [ranking.key, ranking.range] as const)
+            );
 
             if (nextOverallRangeScore < currentOverallRangeScore) {
-              suggestionOptions.goal1.push(candidateSuggestion);
+              suggestionOptions.goal1.push({
+                sourceTeamId: leftTeam.id,
+                targetTeamId: rightTeam.id,
+                sourcePlayerId: leftPlayerId,
+                targetPlayerId: rightPlayerId,
+                nextOverallRangeScore,
+                nextOverallScore,
+                categoryKey: currentSubcategorySummary.rankings[0]?.key ?? SCENARIO_SUBCATEGORY_ATTRIBUTES[0]?.key,
+                categoryLabel:
+                  currentSubcategorySummary.rankings[0]?.label ?? SCENARIO_SUBCATEGORY_ATTRIBUTES[0]?.label ?? "Category",
+                nextCategoryRange: nextSubcategorySummary.rankings[0]?.range ?? 0,
+                nextTotalSubcategoryRange: nextSubcategorySummary.totalRangeSum
+              });
             }
 
-            if (nextSubcategorySummary.maxRange < currentSubcategorySummary.maxRange) {
-              suggestionOptions.goal2.push(candidateSuggestion);
+            for (const ranking of currentSubcategorySummary.rankings) {
+              const currentCategoryRange = currentRangeByCategoryKey.get(ranking.key) ?? 0;
+              const nextCategoryRange = nextRangeByCategoryKey.get(ranking.key) ?? 0;
+
+              if (nextCategoryRange >= currentCategoryRange) {
+                continue;
+              }
+
+              const candidateSuggestion: ScenarioStatsTradeSuggestion = {
+                sourceTeamId: leftTeam.id,
+                targetTeamId: rightTeam.id,
+                sourcePlayerId: leftPlayerId,
+                targetPlayerId: rightPlayerId,
+                nextOverallRangeScore,
+                nextOverallScore,
+                categoryKey: ranking.key,
+                categoryLabel: ranking.label,
+                nextCategoryRange,
+                nextTotalSubcategoryRange: nextSubcategorySummary.totalRangeSum
+              };
+
+              const existingSuggestions = suggestionOptions.goal2ByCategory[ranking.key] ?? [];
+              suggestionOptions.goal2ByCategory[ranking.key] = [
+                ...existingSuggestions,
+                candidateSuggestion
+              ];
             }
           }
         }
@@ -932,9 +1044,11 @@ function buildScenarioStatsBalancerReport(
   suggestionOptions.goal1.sort((left, right) =>
     compareScenarioStatsTradeSuggestionsForGoal("goal1", left, right)
   );
-  suggestionOptions.goal2.sort((left, right) =>
-    compareScenarioStatsTradeSuggestionsForGoal("goal2", left, right)
-  );
+  for (const categoryKey of Object.keys(suggestionOptions.goal2ByCategory) as PlayerAttributeKey[]) {
+    suggestionOptions.goal2ByCategory[categoryKey]?.sort((left, right) =>
+      compareScenarioStatsTradeSuggestionsForGoal("goal2", left, right)
+    );
+  }
 
   return {
     completeTeams,
@@ -943,20 +1057,28 @@ function buildScenarioStatsBalancerReport(
     currentMaxSubcategoryRange: currentSubcategorySummary.maxRange,
     currentMaxSubcategoryLabel: currentSubcategorySummary.maxLabel,
     currentTotalSubcategoryRange: currentSubcategorySummary.totalRangeSum,
+    subcategoryRankings: currentSubcategorySummary.rankings,
     goal1Suggestions: suggestionOptions.goal1,
-    goal2Suggestions: suggestionOptions.goal2,
     goal1Suggestion: suggestionOptions.goal1[0] ?? null,
-    goal2Suggestion: suggestionOptions.goal2[0] ?? null
+    goal2SuggestionsByCategory: suggestionOptions.goal2ByCategory
   };
 }
 
 function getChartTeamLabelLines(name: string) {
-  const words = name.trim().split(/\s+/);
+  const words = name.trim().split(/\s+/).filter(Boolean);
   if (words.length <= 1) {
     return [name];
   }
 
-  return [words[0], words.slice(1).join(" ")];
+  if (words.length === 2) {
+    return words;
+  }
+
+  if (words.length === 3) {
+    return words;
+  }
+
+  return [words[0], words.slice(1, -1).join(" "), words[words.length - 1]];
 }
 
 function getMatchupTeamLabelLines(name: string) {
@@ -1027,29 +1149,45 @@ function buildScenarioStatsTradeHelperText(
   return `Trade ${sourcePlayerName} for ${targetPlayerName} to improve ${goalLabel}.`;
 }
 
-function buildScenarioStatsCategoryHelperText(report: ScenarioStatsBalancerReport): ReactNode {
-  if (report.completeTeams.length < 2) {
+function buildScenarioStatsCategoryHelperText(
+  completeTeamCount: number,
+  category: ScenarioStatsCategoryImbalance | null
+): ReactNode {
+  if (completeTeamCount < 2) {
     return "Complete at least two team rosters to compare categories.";
+  }
+
+  if (!category) {
+    return "No category imbalances are available right now.";
   }
 
   return (
     <>
-      <strong>{report.currentMaxSubcategoryLabel}</strong> is the most imbalanced.
+      <strong>{category.label}</strong> is the most imbalanced remaining category.
     </>
   );
 }
 
 function buildScenarioStatsGoal2TradeHelperText(
-  report: ScenarioStatsBalancerReport,
+  completeTeamCount: number,
+  category: ScenarioStatsCategoryImbalance | null,
   suggestion: ScenarioStatsTradeSuggestion | null,
   playersById: ReadonlyMap<number, Player>
 ): ReactNode {
-  if (report.completeTeams.length < 2) {
+  if (completeTeamCount < 2) {
     return "Complete at least two team rosters to get trade recommendations.";
   }
 
+  if (!category) {
+    return "No category imbalances are available right now.";
+  }
+
   if (!suggestion) {
-    return "No player trade improves goal 2 right now.";
+    return (
+      <>
+        No player trade improves <strong>{category.label}</strong> right now.
+      </>
+    );
   }
 
   const sourcePlayerName =
@@ -1062,7 +1200,7 @@ function buildScenarioStatsGoal2TradeHelperText(
   return (
     <>
       Trade {sourcePlayerName} for {targetPlayerName} to improve{" "}
-      <strong>{report.currentMaxSubcategoryLabel}</strong>.
+      <strong>{category.label}</strong>.
     </>
   );
 }
@@ -4600,8 +4738,9 @@ function TeamsContent() {
 
   return (
     <AppShell
-      title="Teams Board"
+      title="Team Builder"
       copy={null}
+      shellClassName="teams-route-shell"
     >
       <div className="status-bar">
         {loading ? <div className="status-chip">Loading roster seed...</div> : null}
@@ -4769,22 +4908,29 @@ function TeamsContent() {
             suggestionCursors.statsGoal1,
             scenarioStatsBalancerReport.goal1Suggestions.length
           );
-          const goal2StatsSuggestionIndex = clampScenarioSuggestionIndex(
+          const goal2SkippableCategories = scenarioStatsBalancerReport.subcategoryRankings.filter(
+            (category) => category.range >= 3
+          );
+          const goal2StatsCategoryIndex = clampScenarioSuggestionIndex(
             suggestionCursors.statsGoal2,
-            scenarioStatsBalancerReport.goal2Suggestions.length
+            goal2SkippableCategories.length
           );
           const goal1StatsSuggestion =
             scenarioStatsBalancerReport.goal1Suggestions[goal1StatsSuggestionIndex] ?? null;
+          const goal2ActiveCategory =
+            goal2SkippableCategories[goal2StatsCategoryIndex] ??
+            scenarioStatsBalancerReport.subcategoryRankings[0] ??
+            null;
           const goal2StatsSuggestion =
-            scenarioStatsBalancerReport.goal2Suggestions[goal2StatsSuggestionIndex] ?? null;
+            (goal2ActiveCategory
+              ? scenarioStatsBalancerReport.goal2SuggestionsByCategory[goal2ActiveCategory.key]
+              : undefined)?.[0] ?? null;
           const goal1StatsTradeHelperText = buildScenarioStatsTradeHelperText(
             "goal 1",
             goal1StatsSuggestion,
             scenarioStatsBalancerReport.completeTeams.length,
             playerById
           );
-          const goal2StatsCategoryHelperText =
-            buildScenarioStatsCategoryHelperText(scenarioStatsBalancerReport);
           const goal1StatsTradeHelperNode = buildScenarioSuggestionHelperText(
             goal1StatsTradeHelperText,
             goal1StatsSuggestionIndex + 1 < scenarioStatsBalancerReport.goal1Suggestions.length
@@ -4799,24 +4945,28 @@ function TeamsContent() {
                 }
               : undefined
           );
-          const goal2StatsTradeHelperText = buildScenarioStatsGoal2TradeHelperText(
-            scenarioStatsBalancerReport,
-            goal2StatsSuggestion,
-            playerById
-          );
-          const goal2StatsTradeHelperNode = buildScenarioSuggestionHelperText(
-            goal2StatsTradeHelperText,
-            goal2StatsSuggestionIndex + 1 < scenarioStatsBalancerReport.goal2Suggestions.length
+          const goal2StatsCategoryHelperText = buildScenarioSuggestionHelperText(
+            buildScenarioStatsCategoryHelperText(
+              scenarioStatsBalancerReport.completeTeams.length,
+              goal2ActiveCategory
+            ),
+            goal2StatsCategoryIndex + 1 < goal2SkippableCategories.length
               ? {
                   onNext: () =>
                     showNextScenarioSuggestion(
                       scenario.id,
                       "statsGoal2",
-                      scenarioStatsBalancerReport.goal2Suggestions.length
+                      goal2SkippableCategories.length
                     ),
-                  nextAriaLabel: "Show next Goal 2 stats trade suggestion"
+                  nextAriaLabel: "Skip to the next Goal 2 imbalance category"
                 }
               : undefined
+          );
+          const goal2StatsTradeHelperText = buildScenarioStatsGoal2TradeHelperText(
+            scenarioStatsBalancerReport.completeTeams.length,
+            goal2ActiveCategory,
+            goal2StatsSuggestion,
+            playerById
           );
           const scenarioCollapsed = Boolean(scenarioReorder) || scenario.collapsed;
           const scenarioIsDragging = scenarioReorder?.scenarioId === scenario.id;
@@ -4825,6 +4975,7 @@ function TeamsContent() {
           const scenarioForceTwoLineNames = Object.values(
             scenarioWrappedTeamNames[scenario.id] ?? {}
           ).some(Boolean);
+          const scenarioCardMinWidth = getScenarioCardMinWidth(scenario.teams.length);
 
           return (
             <section
@@ -4837,6 +4988,7 @@ function TeamsContent() {
                 }
               }}
               className={`panel board-shell${scenarioCollapsed ? " collapsed" : ""}${scenarioIsDragging ? " scenario-drag-placeholder" : ""}`}
+              style={scenarioCollapsed ? undefined : { minWidth: `${scenarioCardMinWidth}px` }}
             >
               <div className="scenario-header">
                 <button
@@ -5380,11 +5532,12 @@ function TeamsContent() {
                     analyticsMode={analyticsMode}
                     charts={scenarioCharts}
                     categoryAdvantageRows={scenarioCategoryAdvantageRows}
+                    goal2ActiveCategory={goal2ActiveCategory}
                     incompleteTeamIds={scenarioIncompleteTeamIds}
                     statsBalancerReport={scenarioStatsBalancerReport}
                     goal1StatsTradeHelperText={goal1StatsTradeHelperNode}
                     goal2StatsCategoryHelperText={goal2StatsCategoryHelperText}
-                    goal2StatsTradeHelperText={goal2StatsTradeHelperNode}
+                    goal2StatsTradeHelperText={goal2StatsTradeHelperText}
                     matchupReport={scenarioMatchupReport}
                     goal1SwapHelperText={goal1SwapSuggestionText}
                     goal2SwapHelperText={goal2SwapSuggestionText}
@@ -5784,11 +5937,14 @@ function ScenarioAttributeCharts({ charts }: { charts: ScenarioAttributeChart[] 
   return (
     <section className="scenario-analytics" aria-label="Team totals by attribute category">
       {charts.map((chart) => (
-        <div key={chart.label} className="scenario-chart-card">
+        <div key={chart.label} className="scenario-chart-card scenario-attribute-chart-card">
           <div className="scenario-chart-header">
             <h2 className="scenario-chart-title">{chart.label}</h2>
           </div>
-          <div className="scenario-chart-grid">
+          <div
+            className="scenario-chart-grid"
+            style={{ gridTemplateColumns: `repeat(${Math.max(chart.stacks.length, 1)}, minmax(0, 1fr))` }}
+          >
             {chart.stacks.map((stack, stackIndex) => (
               <div key={stack.team.id} className="scenario-chart-column">
                 <div className="scenario-chart-total">{formatChartValue(stack.total)}</div>
@@ -6088,11 +6244,13 @@ function ScenarioStatsComparisonBarCell({
 
 function ScenarioStatsTeamBalancerCard({
   report,
+  goal2ActiveCategory,
   goal1StatsTradeHelperText,
   goal2StatsCategoryHelperText,
   goal2StatsTradeHelperText
 }: {
   report: ScenarioStatsBalancerReport;
+  goal2ActiveCategory: ScenarioStatsCategoryImbalance | null;
   goal1StatsTradeHelperText: ReactNode;
   goal2StatsCategoryHelperText: ReactNode;
   goal2StatsTradeHelperText: ReactNode;
@@ -6109,7 +6267,7 @@ function ScenarioStatsTeamBalancerCard({
     0,
     Math.min(
       SCENARIO_STATS_BALANCER_GOAL2_LIMIT,
-      SCENARIO_STATS_BALANCER_GOAL2_LIMIT - report.currentMaxSubcategoryRange
+      SCENARIO_STATS_BALANCER_GOAL2_LIMIT - (goal2ActiveCategory?.range ?? 0)
     )
   );
   const goal2Width = (goal2Completion / SCENARIO_STATS_BALANCER_GOAL2_LIMIT) * 100;
@@ -6144,7 +6302,7 @@ function ScenarioStatsTeamBalancerCard({
         <div
           className="scenario-matchup-optimization-bar"
           role="img"
-          aria-label={`Maximum subcategory imbalance ${report.currentMaxSubcategoryRange.toFixed(1)} on a 0 to ${SCENARIO_STATS_BALANCER_GOAL2_LIMIT} scale`}
+          aria-label={`${goal2ActiveCategory?.label ?? "Category"} imbalance ${(goal2ActiveCategory?.range ?? 0).toFixed(1)} on a 0 to ${SCENARIO_STATS_BALANCER_GOAL2_LIMIT} scale`}
         >
           <div
             className="scenario-matchup-optimization-bar-segment fair"
@@ -6155,7 +6313,7 @@ function ScenarioStatsTeamBalancerCard({
             style={{ width: `${100 - goal2Width}%` }}
           />
           <div className="scenario-matchup-optimization-bar-value">
-            Score: {report.currentMaxSubcategoryRange.toFixed(1)}
+            Score: {(goal2ActiveCategory?.range ?? 0).toFixed(1)}
           </div>
         </div>
         <p className="scenario-matchup-overall-helper">{goal2StatsTradeHelperText}</p>
@@ -6166,6 +6324,7 @@ function ScenarioStatsTeamBalancerCard({
 
 function ScenarioStatsComparison2({
   categoryAdvantageRows,
+  goal2ActiveCategory,
   incompleteTeamIds,
   statsBalancerReport,
   goal1StatsTradeHelperText,
@@ -6174,6 +6333,7 @@ function ScenarioStatsComparison2({
   teams
 }: {
   categoryAdvantageRows: ScenarioCategoryAdvantageRow[];
+  goal2ActiveCategory: ScenarioStatsCategoryImbalance | null;
   incompleteTeamIds: string[];
   statsBalancerReport: ScenarioStatsBalancerReport;
   goal1StatsTradeHelperText: ReactNode;
@@ -6196,15 +6356,21 @@ function ScenarioStatsComparison2({
     registerHeaderRef,
     incompleteTeamOverlays
   ] = useScenarioStatsV2IncompleteOverlays(incompleteTeamIds);
+  const statsSectionStyle = getScenarioStatsSectionStyle(teams.length);
 
   return (
-    <section className="scenario-stats-v2" aria-label="Alternative team stats comparison">
+    <section
+      className="scenario-stats-v2"
+      aria-label="Alternative team stats comparison"
+      style={statsSectionStyle}
+    >
       <div className="scenario-chart-card scenario-stats-v2-card">
         <div className="scenario-chart-header scenario-chart-header-stacked">
           <h2 className="scenario-chart-title">Team Balancer</h2>
         </div>
         <ScenarioStatsTeamBalancerCard
           report={statsBalancerReport}
+          goal2ActiveCategory={goal2ActiveCategory}
           goal1StatsTradeHelperText={goal1StatsTradeHelperText}
           goal2StatsCategoryHelperText={goal2StatsCategoryHelperText}
           goal2StatsTradeHelperText={goal2StatsTradeHelperText}
@@ -6216,7 +6382,10 @@ function ScenarioStatsComparison2({
           <h2 className="scenario-chart-title">Category Advantages</h2>
         </div>
         <div ref={tableWrapRef} className="scenario-stats-v2-table-wrap">
-          <table className="scenario-stats-v2-table">
+          <table
+            className="scenario-stats-v2-table"
+            style={{ minWidth: `${getScenarioStatsTableMinWidth(teams.length)}px` }}
+          >
             <colgroup>
               <col
                 className="scenario-stats-v2-col-group"
@@ -6241,7 +6410,11 @@ function ScenarioStatsComparison2({
                     scope="col"
                     className="scenario-stats-v2-team-heading"
                   >
-                    {getTeamDisplayName(team, index)}
+                    <span className="scenario-stats-v2-team-heading-inner">
+                      {getChartTeamLabelLines(getTeamDisplayName(team, index)).map((line) => (
+                        <span key={line}>{line}</span>
+                      ))}
+                    </span>
                   </th>
                 ))}
               </tr>
@@ -6351,6 +6524,7 @@ function ScenarioStatsComparison2({
 function ScenarioCombinedStatsComparison({
   charts,
   categoryAdvantageRows,
+  goal2ActiveCategory,
   incompleteTeamIds,
   statsBalancerReport,
   goal1StatsTradeHelperText,
@@ -6360,6 +6534,7 @@ function ScenarioCombinedStatsComparison({
 }: {
   charts: ScenarioAttributeChart[];
   categoryAdvantageRows: ScenarioCategoryAdvantageRow[];
+  goal2ActiveCategory: ScenarioStatsCategoryImbalance | null;
   incompleteTeamIds: string[];
   statsBalancerReport: ScenarioStatsBalancerReport;
   goal1StatsTradeHelperText: ReactNode;
@@ -6371,6 +6546,7 @@ function ScenarioCombinedStatsComparison({
     <div className="scenario-stats-combined">
       <ScenarioStatsComparison2
         categoryAdvantageRows={categoryAdvantageRows}
+        goal2ActiveCategory={goal2ActiveCategory}
         incompleteTeamIds={incompleteTeamIds}
         statsBalancerReport={statsBalancerReport}
         goal1StatsTradeHelperText={goal1StatsTradeHelperText}
@@ -6576,6 +6752,7 @@ function ScenarioAnalyticsSection({
   analyticsMode,
   charts,
   categoryAdvantageRows,
+  goal2ActiveCategory,
   incompleteTeamIds,
   statsBalancerReport,
   goal1StatsTradeHelperText,
@@ -6592,6 +6769,7 @@ function ScenarioAnalyticsSection({
   analyticsMode: ScenarioAnalyticsMode;
   charts: ScenarioAttributeChart[];
   categoryAdvantageRows: ScenarioCategoryAdvantageRow[];
+  goal2ActiveCategory: ScenarioStatsCategoryImbalance | null;
   incompleteTeamIds: string[];
   statsBalancerReport: ScenarioStatsBalancerReport;
   goal1StatsTradeHelperText: ReactNode;
@@ -6628,6 +6806,7 @@ function ScenarioAnalyticsSection({
         <ScenarioCombinedStatsComparison
           charts={charts}
           categoryAdvantageRows={categoryAdvantageRows}
+          goal2ActiveCategory={goal2ActiveCategory}
           incompleteTeamIds={incompleteTeamIds}
           statsBalancerReport={statsBalancerReport}
           goal1StatsTradeHelperText={goal1StatsTradeHelperText}
