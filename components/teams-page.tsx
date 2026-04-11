@@ -68,7 +68,7 @@ import type {
   Team
 } from "@/lib/types";
 import type { RealtimeChannel } from "@supabase/supabase-js";
-import type { MouseEvent as ReactMouseEvent, ReactNode } from "react";
+import type { CSSProperties, MouseEvent as ReactMouseEvent, ReactNode } from "react";
 
 type ScenarioSlot = {
   scenarioId: string;
@@ -204,6 +204,7 @@ type TeamDraft = {
 };
 
 type ScenarioTeamDrafts = Record<string, Record<string, TeamDraft>>;
+type ScenarioTeamHeaderHeights = Record<string, Record<string, number>>;
 
 type TeamAttributeStack = {
   team: Team;
@@ -1101,6 +1102,80 @@ function getMatchupTeamLabelLines(name: string) {
 function getChartSegmentColor(teamColor: string, index: number) {
   const tintStrength = [92, 82, 72][index] ?? 72;
   return `color-mix(in srgb, ${teamColor} ${tintStrength}%, white ${100 - tintStrength}%)`;
+}
+
+const DARK_SLOT_TEXT_COLOR = "#171c18";
+const LIGHT_SLOT_TEXT_COLOR = "#ffffff";
+const DARK_SLOT_MUTED_TEXT_COLOR = "rgba(23, 28, 24, 0.52)";
+const LIGHT_SLOT_MUTED_TEXT_COLOR = "rgba(255, 255, 255, 0.78)";
+const DARK_SLOT_TEXT_RGB = [23, 28, 24] as const;
+
+function parseColorChannels(color: string) {
+  const normalized = color.trim();
+
+  if (/^#([\da-f]{3}|[\da-f]{6})$/i.test(normalized)) {
+    const hex = normalized.slice(1);
+    const expanded = hex.length === 3 ? hex.split("").map((value) => `${value}${value}`).join("") : hex;
+
+    return [
+      Number.parseInt(expanded.slice(0, 2), 16),
+      Number.parseInt(expanded.slice(2, 4), 16),
+      Number.parseInt(expanded.slice(4, 6), 16)
+    ] as const;
+  }
+
+  const rgbMatch = normalized.match(
+    /^rgba?\(\s*(\d{1,3})(?:\s*,\s*|\s+)(\d{1,3})(?:\s*,\s*|\s+)(\d{1,3})(?:\s*(?:,|\/)\s*[\d.]+)?\s*\)$/i
+  );
+  if (!rgbMatch) {
+    return null;
+  }
+
+  return rgbMatch.slice(1, 4).map((value) => Math.max(0, Math.min(255, Number.parseInt(value, 10)))) as [
+    number,
+    number,
+    number
+  ];
+}
+
+function getRelativeLuminance([red, green, blue]: readonly [number, number, number]) {
+  const convertChannel = (channel: number) => {
+    const normalized = channel / 255;
+    return normalized <= 0.03928
+      ? normalized / 12.92
+      : ((normalized + 0.055) / 1.055) ** 2.4;
+  };
+
+  return (
+    0.2126 * convertChannel(red) +
+    0.7152 * convertChannel(green) +
+    0.0722 * convertChannel(blue)
+  );
+}
+
+function getContrastRatio(luminanceA: number, luminanceB: number) {
+  const lighter = Math.max(luminanceA, luminanceB);
+  const darker = Math.min(luminanceA, luminanceB);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function getReadableTeamSlotTextColor(teamColor: string) {
+  const colorChannels = parseColorChannels(teamColor);
+  if (!colorChannels) {
+    return DARK_SLOT_TEXT_COLOR;
+  }
+
+  const backgroundLuminance = getRelativeLuminance(colorChannels);
+  const whiteContrast = getContrastRatio(backgroundLuminance, 1);
+  const darkContrast = getContrastRatio(backgroundLuminance, getRelativeLuminance(DARK_SLOT_TEXT_RGB));
+
+  return whiteContrast >= darkContrast ? LIGHT_SLOT_TEXT_COLOR : DARK_SLOT_TEXT_COLOR;
+}
+
+function getReadableTeamSlotMutedTextColor(teamColor: string) {
+  return getReadableTeamSlotTextColor(teamColor) === LIGHT_SLOT_TEXT_COLOR
+    ? LIGHT_SLOT_MUTED_TEXT_COLOR
+    : DARK_SLOT_MUTED_TEXT_COLOR;
 }
 
 function buildScenarioSwapHelperText(
@@ -2366,9 +2441,9 @@ function TeamsContent() {
   const [openStatsBalanceFilterScenarioId, setOpenStatsBalanceFilterScenarioId] = useState<string | null>(
     null
   );
-  const [scenarioWrappedTeamNames, setScenarioWrappedTeamNames] = useState<
-    Record<string, Record<string, boolean>>
-  >({});
+  const [scenarioTeamHeaderHeights, setScenarioTeamHeaderHeights] = useState<ScenarioTeamHeaderHeights>(
+    {}
+  );
 
   const playerById = useMemo(
     () => new Map(players.map((player) => [player.id, player])),
@@ -2587,24 +2662,24 @@ function TeamsContent() {
       scenarios.map((scenario) => [scenario.id, new Set(scenario.teams.map((team) => team.id))] as const)
     );
 
-    setScenarioWrappedTeamNames((current) => {
+    setScenarioTeamHeaderHeights((current) => {
       let didChange = false;
-      const nextEntries = Object.entries(current).flatMap(([scenarioId, wrappedByTeamId]) => {
+      const nextEntries = Object.entries(current).flatMap(([scenarioId, heightsByTeamId]) => {
         const validTeamIds = validTeamsByScenario.get(scenarioId);
         if (!validTeamIds) {
           didChange = true;
           return [];
         }
 
-        const nextWrappedByTeamId = Object.fromEntries(
-          Object.entries(wrappedByTeamId).filter(([teamId]) => validTeamIds.has(teamId))
+        const nextHeightsByTeamId = Object.fromEntries(
+          Object.entries(heightsByTeamId).filter(([teamId]) => validTeamIds.has(teamId))
         );
 
-        if (Object.keys(nextWrappedByTeamId).length !== Object.keys(wrappedByTeamId).length) {
+        if (Object.keys(nextHeightsByTeamId).length !== Object.keys(heightsByTeamId).length) {
           didChange = true;
         }
 
-        return [[scenarioId, nextWrappedByTeamId] as const];
+        return [[scenarioId, nextHeightsByTeamId] as const];
       });
 
       return didChange ? Object.fromEntries(nextEntries) : current;
@@ -4972,9 +5047,10 @@ function TeamsContent() {
           const scenarioIsDragging = scenarioReorder?.scenarioId === scenario.id;
           const deleteModalOpen = scenarioPendingDeleteId === scenario.id;
           const orderedAvailablePlayers = orderPlayersForPoolColumns(availablePlayers);
-          const scenarioForceTwoLineNames = Object.values(
-            scenarioWrappedTeamNames[scenario.id] ?? {}
-          ).some(Boolean);
+          const scenarioHeaderHeight = scenario.teams.reduce((maxHeight, team) => {
+            const measuredHeight = scenarioTeamHeaderHeights[scenario.id]?.[team.id] ?? 0;
+            return Math.max(maxHeight, measuredHeight);
+          }, 0);
           const scenarioCardMinWidth = getScenarioCardMinWidth(scenario.teams.length);
 
           return (
@@ -5389,13 +5465,13 @@ function TeamsContent() {
                             teamNameError={scenarioTeamNameErrors[teamIndex] ?? null}
                             draftName={scenarioDraftTeams[teamIndex]?.name ?? team.name}
                             draftColor={scenarioDraftTeams[teamIndex]?.color ?? team.color}
-                            forceTwoLineName={scenarioForceTwoLineNames}
+                            sharedHeaderHeight={scenarioHeaderHeight || undefined}
                             canRemoveTeam={scenario.teams.length > 1}
                             teamEditingDisabled={Boolean(dragState) || Boolean(scenarioReorder)}
-                            onNameWrapChange={(teamId, isWrapped) =>
-                              setScenarioWrappedTeamNames((current) => {
+                            onHeaderHeightChange={(teamId, height) =>
+                              setScenarioTeamHeaderHeights((current) => {
                                 const currentScenario = current[scenario.id] ?? {};
-                                if ((currentScenario[teamId] ?? false) === isWrapped) {
+                                if (Math.abs((currentScenario[teamId] ?? 0) - height) < 1) {
                                   return current;
                                 }
 
@@ -5403,7 +5479,7 @@ function TeamsContent() {
                                   ...current,
                                   [scenario.id]: {
                                     ...currentScenario,
-                                    [teamId]: isWrapped
+                                    [teamId]: height
                                   }
                                 };
                               })
@@ -5571,7 +5647,8 @@ function TeamsContent() {
                 top: dragState.point.y,
                 width: dragState.chipSize.width,
                 minHeight: dragState.chipSize.height,
-                background: dragState.color
+                background: dragState.color,
+                color: getReadableTeamSlotTextColor(dragState.color)
               }}
             >
               {formatPlayerLabel(playerById.get(dragState.playerId)?.name ?? "")}
@@ -5681,10 +5758,10 @@ function TeamColumn({
   teamNameError,
   draftName,
   draftColor,
-  forceTwoLineName,
+  sharedHeaderHeight,
   canRemoveTeam,
   teamEditingDisabled,
-  onNameWrapChange,
+  onHeaderHeightChange,
   onNameChange,
   onNameCommit,
   onRemoveTeam,
@@ -5712,10 +5789,10 @@ function TeamColumn({
   teamNameError: string | null;
   draftName: string;
   draftColor: string;
-  forceTwoLineName: boolean;
+  sharedHeaderHeight?: number;
   canRemoveTeam: boolean;
   teamEditingDisabled: boolean;
-  onNameWrapChange: (teamId: string, isWrapped: boolean) => void;
+  onHeaderHeightChange: (teamId: string, height: number) => void;
   onNameChange: (value: string) => void;
   onNameCommit: (options?: { immediate?: boolean }) => void;
   onRemoveTeam: () => void;
@@ -5738,7 +5815,21 @@ function TeamColumn({
   onClear: (slot: SlotDescriptor) => void;
 }) {
   const teamLabel = getTeamDisplayName(team, teamIndex);
+  const headerRef = useRef<HTMLDivElement | null>(null);
+  const headerContentRef = useRef<HTMLDivElement | null>(null);
   const nameInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const onHeaderHeightChangeRef = useRef(onHeaderHeightChange);
+  const slotTextColor = getReadableTeamSlotTextColor(draftColor);
+  const slotMutedTextColor = getReadableTeamSlotMutedTextColor(draftColor);
+  const teamSlotStyle = {
+    background: draftColor,
+    "--slot-text-color": slotTextColor,
+    "--slot-muted-text-color": slotMutedTextColor
+  } as CSSProperties;
+
+  useEffect(() => {
+    onHeaderHeightChangeRef.current = onHeaderHeightChange;
+  }, [onHeaderHeightChange]);
 
   useLayoutEffect(() => {
     const node = nameInputRef.current;
@@ -5756,9 +5847,7 @@ function TeamColumn({
     const updateHeight = () => {
       node.style.height = "0px";
       const measuredHeight = Math.min(Math.max(node.scrollHeight, minHeight), maxHeight);
-      const isWrapped = measuredHeight > minHeight + 1;
-      onNameWrapChange(team.id, isWrapped);
-      node.style.height = `${forceTwoLineName ? maxHeight : measuredHeight}px`;
+      node.style.height = `${measuredHeight}px`;
     };
 
     updateHeight();
@@ -5769,67 +5858,101 @@ function TeamColumn({
     resizeObserver.observe(node);
 
     return () => resizeObserver.disconnect();
-  }, [draftName, forceTwoLineName, onNameWrapChange, team.id]);
+  }, [draftName]);
+
+  useLayoutEffect(() => {
+    const headerNode = headerRef.current;
+    const headerContentNode = headerContentRef.current;
+    if (!headerNode || !headerContentNode) {
+      return;
+    }
+
+    const computedStyle = window.getComputedStyle(headerNode);
+    const verticalPadding =
+      (Number.parseFloat(computedStyle.paddingTop) || 0) +
+      (Number.parseFloat(computedStyle.paddingBottom) || 0);
+    const reportHeight = () => {
+      onHeaderHeightChangeRef.current(
+        team.id,
+        Math.ceil(headerContentNode.getBoundingClientRect().height + verticalPadding)
+      );
+    };
+
+    reportHeight();
+
+    const resizeObserver = new ResizeObserver(() => {
+      reportHeight();
+    });
+    resizeObserver.observe(headerContentNode);
+
+    return () => resizeObserver.disconnect();
+  }, [draftName, team.id, teamNameError]);
 
   return (
     <section className="team-card">
-      <div className={`team-name team-name-editor${forceTwoLineName ? " force-two-line" : ""}`}>
-        <div className="team-name-edit-row">
-          <textarea
-            ref={nameInputRef}
-            className={`team-inline-name-input${teamNameError ? " invalid" : ""}`}
-            value={draftName}
-            onChange={(event) => onNameChange(event.target.value.replace(/\s*\n+\s*/g, " "))}
-            onBlur={() => onNameCommit({ immediate: true })}
-            placeholder={`Team ${teamIndex + 1}`}
-            spellCheck={false}
-            disabled={teamEditingDisabled}
-            rows={1}
-          />
-          <div className="team-name-controls">
-            <button
-              type="button"
-              className="team-config-remove-button team-inline-icon-button team-inline-rename-button"
-              onClick={onRenameTeam}
+      <div
+        ref={headerRef}
+        className="team-name team-name-editor"
+        style={sharedHeaderHeight ? { minHeight: `${sharedHeaderHeight}px` } : undefined}
+      >
+        <div ref={headerContentRef} className="team-name-content">
+          <div className="team-name-edit-row">
+            <textarea
+              ref={nameInputRef}
+              className={`team-inline-name-input${teamNameError ? " invalid" : ""}`}
+              value={draftName}
+              onChange={(event) => onNameChange(event.target.value.replace(/\s*\n+\s*/g, " "))}
+              onBlur={() => onNameCommit({ immediate: true })}
+              placeholder={`Team ${teamIndex + 1}`}
+              spellCheck={false}
               disabled={teamEditingDisabled}
-              aria-label={`Generate a new name for ${teamLabel}`}
-              title="Generate team name"
-            >
-              <img
-                aria-hidden="true"
-                alt=""
-                src="/team-name-shuffle.png"
-                className="team-inline-icon-image"
-              />
-            </button>
-            <label className="team-config-color-row">
-              <input
-                type="color"
-                className="team-config-color-input"
-                value={draftColor}
-                onChange={(event) => onColorChange(event.target.value)}
-                onBlur={() => onColorCommit({ immediate: true })}
+              rows={1}
+            />
+            <div className="team-name-controls">
+              <button
+                type="button"
+                className="team-config-remove-button team-inline-icon-button team-inline-rename-button"
+                onClick={onRenameTeam}
                 disabled={teamEditingDisabled}
-              />
-            </label>
-            <button
-              type="button"
-              className="team-config-remove-button team-inline-icon-button team-inline-remove-button"
-              onClick={onRemoveTeam}
-              disabled={!canRemoveTeam || teamEditingDisabled}
-              aria-label={`Remove ${teamLabel}`}
-              title="Remove team"
-            >
-              <img
-                aria-hidden="true"
-                alt=""
-                src="/team-remove-trash.png"
-                className="team-inline-icon-image"
-              />
-            </button>
+                aria-label={`Generate a new name for ${teamLabel}`}
+                title="Generate team name"
+              >
+                <img
+                  aria-hidden="true"
+                  alt=""
+                  src="/team-name-shuffle.png"
+                  className="team-inline-icon-image"
+                />
+              </button>
+              <label className="team-config-color-row">
+                <input
+                  type="color"
+                  className="team-config-color-input"
+                  value={draftColor}
+                  onChange={(event) => onColorChange(event.target.value)}
+                  onBlur={() => onColorCommit({ immediate: true })}
+                  disabled={teamEditingDisabled}
+                />
+              </label>
+              <button
+                type="button"
+                className="team-config-remove-button team-inline-icon-button team-inline-remove-button"
+                onClick={onRemoveTeam}
+                disabled={!canRemoveTeam || teamEditingDisabled}
+                aria-label={`Remove ${teamLabel}`}
+                title="Remove team"
+              >
+                <img
+                  aria-hidden="true"
+                  alt=""
+                  src="/team-remove-trash.png"
+                  className="team-inline-icon-image"
+                />
+              </button>
+            </div>
           </div>
+          {teamNameError ? <div className="team-inline-error">{teamNameError}</div> : null}
         </div>
-        {teamNameError ? <div className="team-inline-error">{teamNameError}</div> : null}
       </div>
       <div className="team-slots">
         {POSITIONS.map((position) => {
@@ -5859,7 +5982,7 @@ function TeamColumn({
                 <div
                   ref={registerWrap(slot)}
                   className="slot-select-wrap"
-                  style={{ background: team.color }}
+                  style={teamSlotStyle}
                   role="button"
                   tabIndex={0}
                   onClick={() => onTogglePicker(slot)}

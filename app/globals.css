@@ -1514,15 +1514,19 @@ select {
   font-size: 1rem;
 }
 
-.team-name-editor.force-two-line {
-  min-height: 92px;
-}
-
 .team-name-edit-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
+  width: 100%;
+}
+
+.team-name-content {
+  display: grid;
+  gap: 6px;
+  align-self: start;
+  justify-self: stretch;
   width: 100%;
 }
 
@@ -1686,7 +1690,7 @@ select {
   position: relative;
   min-height: 32px;
   border-radius: 10px;
-  color: #171c18;
+  color: var(--slot-text-color, #171c18);
   font-weight: 700;
   cursor: pointer;
   transition: opacity 120ms ease, filter 120ms ease, transform 120ms ease;
@@ -1699,7 +1703,7 @@ select {
   align-items: center;
   min-height: 32px;
   padding: 1px 6px;
-  color: rgba(23, 28, 24, 0.52);
+  color: var(--slot-muted-text-color, rgba(23, 28, 24, 0.52));
 }
 
 .player-chip {
@@ -1713,7 +1717,7 @@ select {
   padding: 1px 6px;
   border-radius: 10px;
   background: inherit;
-  color: #171c18;
+  color: var(--slot-text-color, #171c18);
   font-weight: 800;
   cursor: grab;
   user-select: none;
@@ -2191,7 +2195,7 @@ select {
   padding: 8px 14px;
   background: transparent;
   color: var(--muted);
-  font-size: 0.82rem;
+  font-size: 1.06rem;
   font-weight: 800;
   cursor: pointer;
   transition: background 140ms ease, color 140ms ease, transform 140ms ease;
