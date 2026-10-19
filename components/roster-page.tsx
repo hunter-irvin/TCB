@@ -153,13 +153,17 @@ function compareNullableNumbers(
 }
 
 function sortPlayers(players: Player[], sortState: RosterSortState) {
-  if (!sortState) {
-    return players;
-  }
-
   const nextPlayers = [...players];
 
   nextPlayers.sort((left, right) => {
+    if (left.active !== right.active) {
+      return left.active ? -1 : 1;
+    }
+
+    if (!sortState) {
+      return 0;
+    }
+
     let primary = 0;
 
     if (sortState.key === "name") {
@@ -234,14 +238,33 @@ function RosterContent() {
   const wrapRef = useRef<HTMLDivElement | null>(null);
   const [sortState, setSortState] = useState<RosterSortState>(null);
   const [pendingFocusPlayerId, setPendingFocusPlayerId] = useState<number | null>(null);
+  const [newRowOrder, setNewRowOrder] = useState<number[]>([]);
   const [columnWidths, setColumnWidths] = useState(() =>
     getRosterColumnWidths(ROSTER_MIN_TABLE_WIDTH)
   );
-  const displayedPlayers = useMemo(() => sortPlayers(players, sortState), [players, sortState]);
+  const displayedPlayers = useMemo(() => {
+    if (sortState) {
+      return sortPlayers(players, sortState);
+    }
+
+    const newPlayerIds = new Set(newRowOrder);
+    const newRows = newRowOrder.flatMap((playerId) => {
+      const player = players.find((candidate) => candidate.id === playerId);
+      return player ? [player] : [];
+    });
+    const orderedPlayers = [
+      ...newRows,
+      ...players.filter((player) => !newPlayerIds.has(player.id))
+    ];
+
+    return sortPlayers(orderedPlayers, null);
+  }, [players, sortState, newRowOrder]);
 
   const handleAddPlayer = () => {
     const playerId = addPlayer();
     if (playerId !== null) {
+      setSortState(null);
+      setNewRowOrder((current) => [playerId, ...current.filter((value) => value !== playerId)]);
       setPendingFocusPlayerId(playerId);
     }
   };
@@ -301,6 +324,11 @@ function RosterContent() {
         </div>
       ) : null}
       <section className="panel table-shell">
+        <div className="roster-add-row">
+          <button type="button" className="roster-add-button" onClick={handleAddPlayer}>
+            Add player
+          </button>
+        </div>
         <div ref={wrapRef} className="roster-sheet-wrap">
           <table className="roster-sheet" style={{ width: `${columnWidths.tableWidth}px` }}>
             <colgroup>
@@ -420,11 +448,11 @@ function RosterContent() {
               </tr>
             </thead>
             <tbody>
-              {displayedPlayers.map((player) => (
+              {displayedPlayers.map((player, index) => (
                 <RosterRow
-                  key={player.rowNumber}
+                  key={player.id}
                   id={player.id}
-                  rowNumber={player.rowNumber}
+                  displayRowNumber={index + 1}
                   active={player.active}
                   name={player.name}
                   positions={player.positions}
@@ -444,14 +472,6 @@ function RosterContent() {
             </tbody>
           </table>
         </div>
-        <div
-          className="roster-add-row"
-          style={{ marginLeft: `${columnWidths.rowNumber}px`, marginTop: "15px" }}
-        >
-          <button type="button" className="roster-add-button" onClick={handleAddPlayer}>
-            Add player
-          </button>
-        </div>
       </section>
     </AppShell>
   );
@@ -459,7 +479,7 @@ function RosterContent() {
 
 function RosterRow({
   id,
-  rowNumber,
+  displayRowNumber,
   active,
   name,
   positions,
@@ -476,7 +496,7 @@ function RosterRow({
   onChemistryChange
 }: {
   id: number;
-  rowNumber: number;
+  displayRowNumber: number;
   active: boolean;
   name: string;
   positions: Position[];
@@ -557,13 +577,13 @@ function RosterRow({
 
   return (
     <tr ref={rowRef} className={`roster-row${active ? "" : " inactive"}`}>
-      <td className="roster-rownum">{rowNumber}</td>
+      <td className="roster-rownum">{displayRowNumber}</td>
       <td className="roster-active-cell">
         <label className="roster-active-toggle">
           <input
             type="checkbox"
             className="roster-active-checkbox"
-            aria-label={`Player ${rowNumber} active`}
+            aria-label={`Player ${displayRowNumber} active`}
             checked={active}
             onChange={() => onActiveToggle(id)}
           />
@@ -572,7 +592,7 @@ function RosterRow({
       <td className="roster-name-cell">
         <input
           className="roster-name"
-          aria-label={`Player ${rowNumber} name`}
+          aria-label={`Player ${displayRowNumber} name`}
           autoFocus={shouldAutoFocus && active}
           value={name}
           onChange={(event) => onNameChange(id, event.target.value)}
@@ -585,7 +605,7 @@ function RosterRow({
         <div
           className="multi-select roster-positions-control"
           role="group"
-          aria-label={`Player ${rowNumber} positions`}
+          aria-label={`Player ${displayRowNumber} positions`}
         >
           {POSITIONS.map((position) => {
             const positionActive = positions.includes(position);
@@ -615,7 +635,7 @@ function RosterRow({
               return (
             <select
               className="roster-attribute-select"
-              aria-label={`Player ${rowNumber} ${attribute.label}`}
+              aria-label={`Player ${displayRowNumber} ${attribute.label}`}
               value={selectValue}
               disabled={!active}
               onChange={(event) =>
@@ -669,7 +689,7 @@ function RosterRow({
                   setOpenPanel((current) => (current === column.key ? null : column.key))
                 }
                 aria-expanded={openPanel === column.key}
-                aria-label={`${column.label} chemistry for player ${name.trim() || rowNumber}`}
+                aria-label={`${column.label} chemistry for player ${name.trim() || displayRowNumber}`}
                 disabled={!active}
               >
                 {activeSelection.length}
@@ -741,7 +761,7 @@ function RosterRow({
             type="button"
             className="roster-menu-button"
             onClick={() => setOpenPanel((current) => (current === "menu" ? null : "menu"))}
-            aria-label={`More actions for player ${name.trim() || rowNumber}`}
+            aria-label={`More actions for player ${name.trim() || displayRowNumber}`}
             aria-expanded={menuOpen}
             disabled={!active}
           >
@@ -760,7 +780,7 @@ function RosterRow({
                   setOpenPanel(null);
                   onDelete(id);
                 }}
-                aria-label={`Delete player ${name.trim() || rowNumber}`}
+                aria-label={`Delete player ${name.trim() || displayRowNumber}`}
               >
                 Delete
               </button>

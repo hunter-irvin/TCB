@@ -488,9 +488,28 @@ select {
   border-spacing: 0 1px;
 }
 
+.roster-sheet thead tr:first-child > th {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  box-sizing: border-box;
+  height: 24px;
+}
+
+.roster-sheet thead tr:nth-child(2) > th {
+  position: sticky;
+  top: 24px;
+  z-index: 5;
+}
+
+.roster-group-spacer[colspan="4"] {
+  visibility: hidden;
+}
+
 .roster-group-spacer {
   padding: 0;
   border: 0;
+  background: rgba(232, 229, 220, 0.92);
 }
 
 .roster-group-head,
@@ -1018,6 +1037,7 @@ select {
 .roster-add-row {
   display: flex;
   justify-content: flex-start;
+  margin-bottom: 15px;
 }
 
 .roster-add-button {
