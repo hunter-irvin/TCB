@@ -4528,6 +4528,42 @@ function TeamsContent() {
     setSelectedAvailablePlayer(null);
   };
 
+  const copyScenario = (scenarioToCopy: Scenario) => {
+    const copiedTeams = cloneTeams(scenarioToCopy.teams).map((team) => ({
+      ...team,
+      id: `${run.slug.toLowerCase()}-team-${createScenarioId()}`
+    }));
+    const copySuffix = " copy";
+    const copiedTitle = `${scenarioToCopy.title
+      .slice(0, 20 - copySuffix.length)
+      .trimEnd()}${copySuffix}`.trimStart();
+    const copiedScenario: Scenario = {
+      id: createScenarioId(),
+      title: copiedTitle,
+      teams: copiedTeams,
+      assignments: Object.fromEntries(
+        scenarioToCopy.teams.map((team, index) => [
+          copiedTeams[index].id,
+          { ...scenarioToCopy.assignments[team.id] }
+        ])
+      ),
+      collapsed: false
+    };
+
+    setScenarios((current) => {
+      const nextScenarios = [
+        ...current.map((scenario) => ({ ...scenario, collapsed: true })),
+        copiedScenario
+      ];
+      queueScenarioMetaSync(nextScenarios);
+      queueScenarioTeamsSync(nextScenarios, [copiedScenario.id]);
+      queueScenarioAssignmentsSync(nextScenarios, [copiedScenario.id]);
+      return nextScenarios;
+    });
+    setOpenPickerSlot(null);
+    setSelectedAvailablePlayer(null);
+  };
+
   const promptDeleteScenario = useCallback((scenarioId: string) => {
     if (dragState || scenarioReorder) {
       return;
@@ -5065,8 +5101,36 @@ function TeamsContent() {
               }}
               className={`panel board-shell${scenarioCollapsed ? " collapsed" : ""}${scenarioIsDragging ? " scenario-drag-placeholder" : ""}`}
               style={scenarioCollapsed ? undefined : { minWidth: `${scenarioCardMinWidth}px` }}
+              onClick={(event) => {
+                if (
+                  !scenarioCollapsed ||
+                  scenarioReorder ||
+                  deleteModalOpen ||
+                  (event.target instanceof Element &&
+                    event.target.closest("button, input, [role='button']"))
+                ) {
+                  return;
+                }
+
+                toggleScenarioCollapsed(scenario.id);
+              }}
             >
-              <div className="scenario-header">
+              <div
+                className="scenario-header"
+                onClick={(event) => {
+                  if (
+                    scenarioCollapsed ||
+                    scenarioReorder ||
+                    deleteModalOpen ||
+                    (event.target instanceof Element &&
+                      event.target.closest("button, input, [role='button']"))
+                  ) {
+                    return;
+                  }
+
+                  toggleScenarioCollapsed(scenario.id);
+                }}
+              >
                 <button
                   type="button"
                   className="scenario-drag-handle"
@@ -5122,6 +5186,7 @@ function TeamsContent() {
                   <input
                     type="text"
                     className="scenario-title-input"
+                    maxLength={20}
                     value={scenario.title}
                     onChange={(event) => updateScenarioTitle(scenario.id, event.target.value)}
                     onBlur={(event) =>
@@ -5136,6 +5201,37 @@ function TeamsContent() {
                     disabled={deleteModalOpen}
                   />
                   <div className="scenario-header-actions">
+                    <button
+                      type="button"
+                      className="scenario-copy-button"
+                      aria-label={`Copy ${scenario.title || "scenario"}`}
+                      title="Copy scenario"
+                      onClick={() => copyScenario(scenario)}
+                      disabled={Boolean(dragState) || Boolean(scenarioReorder) || deleteModalOpen}
+                    >
+                      <svg
+                        className="scenario-copy-icon"
+                        aria-hidden="true"
+                        viewBox="0 0 16 16"
+                        fill="none"
+                      >
+                        <rect
+                          x="5.25"
+                          y="2.75"
+                          width="7.5"
+                          height="9.5"
+                          rx="1.25"
+                          stroke="currentColor"
+                          strokeWidth="1.4"
+                        />
+                        <path
+                          d="M3.25 5v7.75c0 .69.56 1.25 1.25 1.25h6.25"
+                          stroke="currentColor"
+                          strokeWidth="1.4"
+                          strokeLinecap="round"
+                        />
+                      </svg>
+                    </button>
                     <button
                       type="button"
                       className="scenario-delete-button"

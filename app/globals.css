@@ -1067,6 +1067,17 @@ select {
   border-radius: 10px;
 }
 
+.board-shell.collapsed {
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease, box-shadow 140ms ease;
+}
+
+.board-shell.collapsed:hover {
+  border-color: rgba(248, 245, 234, 0.34);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.07));
+  box-shadow: 0 0 0 1px rgba(248, 245, 234, 0.08), var(--shadow);
+}
+
 .scenario-stack {
   display: grid;
   gap: 11px;
@@ -1083,6 +1094,14 @@ select {
   align-items: flex-start;
   gap: 8px;
   margin-bottom: 9px;
+  border-radius: 8px;
+  transition: background 140ms ease, box-shadow 140ms ease;
+}
+
+.board-shell:not(.collapsed) .scenario-header:hover {
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: 0 0 0 5px rgba(255, 255, 255, 0.06);
+  cursor: pointer;
 }
 
 .scenario-header-main {
@@ -1097,12 +1116,14 @@ select {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+  margin-left: auto;
   flex: 0 0 auto;
 }
 
 .scenario-title-input {
   flex: 1 1 auto;
   width: 100%;
+  max-width: 20ch;
   border: 0;
   border-bottom: 1px solid rgba(248, 245, 234, 0.28);
   padding: 0 0 4px;
@@ -1164,6 +1185,7 @@ select {
 }
 
 .scenario-delete-button,
+.scenario-copy-button,
 .scenario-toggle {
   display: inline-flex;
   align-items: center;
@@ -1177,12 +1199,14 @@ select {
   transition: transform 140ms ease, background 140ms ease, box-shadow 140ms ease, opacity 140ms ease;
 }
 
-.scenario-delete-button {
+.scenario-delete-button,
+.scenario-copy-button {
   background: rgba(255, 255, 255, 0.08);
   cursor: pointer;
 }
 
 .scenario-delete-button:enabled:hover,
+.scenario-copy-button:enabled:hover,
 .scenario-toggle:enabled:hover {
   transform: translateY(-1px);
   background: rgba(255, 255, 255, 0.14);
@@ -1190,12 +1214,14 @@ select {
 }
 
 .scenario-delete-button:focus-visible,
+.scenario-copy-button:focus-visible,
 .scenario-toggle:focus-visible {
   outline: 2px solid rgba(255, 255, 255, 0.72);
   outline-offset: 3px;
 }
 
 .scenario-delete-button:disabled,
+.scenario-copy-button:disabled,
 .scenario-toggle:disabled {
   opacity: 0.56;
   cursor: not-allowed;
@@ -1206,6 +1232,12 @@ select {
   display: block;
   width: 12px;
   height: 12px;
+}
+
+.scenario-copy-icon {
+  display: block;
+  width: 14px;
+  height: 14px;
 }
 
 .scenario-toggle {
